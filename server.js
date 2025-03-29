@@ -16,11 +16,13 @@ app.use(express.urlencoded({ extended: true }));
 import testRoutes from "./routes/test.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
 import authRoutes from "./routes/auth.routes.js";
+import roleRoutes from "./routes/role.routes.js";
 
 // Apply routes
 app.use("/api/test", testRoutes);
-app.use("/api", uploadRoutes); // This will make the upload endpoint available at /api/upload
-app.use("/api/auth", authRoutes); // This will make auth endpoints available at /api/auth/*
+app.use("/api", uploadRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/roles", roleRoutes);
 
 // Basic route
 app.get("/", (req, res) => {

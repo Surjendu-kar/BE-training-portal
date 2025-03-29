@@ -242,4 +242,42 @@ router.get("/profile", authenticateUser, (req, res) => {
   });
 });
 
+// Get all users endpoint
+router.get("/users", authenticateUser, async (req, res) => {
+  try {
+    // Get all users from Firestore
+    const usersSnapshot = await admin
+      .firestore()
+      .collection("user_manage")
+      .get();
+
+    if (usersSnapshot.empty) {
+      return res.status(200).json({
+        success: true,
+        users: [],
+      });
+    }
+
+    const users = [];
+    usersSnapshot.forEach((doc) => {
+      users.push({
+        id: doc.id,
+        ...doc.data(),
+      });
+    });
+
+    res.status(200).json({
+      success: true,
+      users: users,
+    });
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch users",
+      error: error.message,
+    });
+  }
+});
+
 export default router;
