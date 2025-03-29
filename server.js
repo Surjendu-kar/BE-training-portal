@@ -9,15 +9,18 @@ const app = express();
 
 // Middleware
 app.use(cors());
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Import routes
 import testRoutes from "./routes/test.routes.js";
 import uploadRoutes from "./routes/upload.routes.js";
+import authRoutes from "./routes/auth.routes.js";
 
 // Apply routes
 app.use("/api/test", testRoutes);
 app.use("/api", uploadRoutes); // This will make the upload endpoint available at /api/upload
+app.use("/api/auth", authRoutes); // This will make auth endpoints available at /api/auth/*
 
 // Basic route
 app.get("/", (req, res) => {
