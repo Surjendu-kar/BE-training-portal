@@ -112,6 +112,91 @@ router.post("/register", authenticateUser, async (req, res) => {
   }
 });
 
+// Update user endpoint
+router.put("/users/:userId", authenticateUser, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { fullName, email, role, password } = req.body;
+
+    // Validate input
+    if (!fullName || !email || !role) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields",
+      });
+    }
+
+    // Update user in Firestore
+    await admin.firestore().collection("user_manage").doc(userId).update({
+      fullName,
+      email,
+      role,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // If password is provided, update it in Firebase Auth
+    if (password) {
+      await admin.auth().updateUser(userId, {
+        password: password,
+      });
+    }
+
+    // Update email and displayName in Firebase Auth
+    await admin.auth().updateUser(userId, {
+      email: email,
+      displayName: fullName,
+    });
+
+    // Update custom claims for role
+    await admin.auth().setCustomUserClaims(userId, {
+      role: role,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "User updated successfully",
+      user: {
+        uid: userId,
+        fullName,
+        email,
+        role,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating user:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update user",
+      error: error.message,
+    });
+  }
+});
+
+// Delete user endpoint
+router.delete("/users/:userId", authenticateUser, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    // Delete user from Firebase Auth
+    await admin.auth().deleteUser(userId);
+
+    // Delete user from Firestore
+    await admin.firestore().collection("user_manage").doc(userId).delete();
+
+    res.status(200).json({
+      success: true,
+      message: "User deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting user:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete user",
+      error: error.message,
+    });
+  }
+});
+
 // Endpoint to verify a Firebase token
 router.post("/verify-token", async (req, res) => {
   try {
