@@ -1,4 +1,4 @@
-import { v2 as cloudinaryV2 } from "cloudinary";
+import cloudinary from "../config/cloudinary.config.js";
 import fs from "fs";
 
 const uploadController = {
@@ -12,8 +12,10 @@ const uploadController = {
         });
       }
 
+      console.log("Attempting to upload to Cloudinary...");
+
       // Upload the image to Cloudinary
-      const result = await cloudinaryV2.uploader.upload(req.file.path, {
+      const result = await cloudinary.uploader.upload(req.file.path, {
         folder: "uploads",
         resource_type: "auto", // Automatically detect the file type
       });
