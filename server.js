@@ -18,13 +18,14 @@ import uploadRoutes from "./routes/upload.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import roleRoutes from "./routes/role.routes.js";
 import courseRoutes from "./routes/course.routes.js";
-
+import batchRoutes from "./routes/batch.routes.js";
 // Apply routes
 app.use("/api/test", testRoutes);
 app.use("/api", uploadRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/roles", roleRoutes);
 app.use("/api/courses", courseRoutes);
+app.use("/api/batches", batchRoutes);
 
 // Basic route
 app.get("/", (req, res) => {
