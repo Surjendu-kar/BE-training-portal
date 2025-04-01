@@ -1169,4 +1169,201 @@ router.delete("/:courseId/course_info", authenticateUser, async (req, res) => {
   }
 });
 
+// Update course modules
+router.put("/:courseId/modules", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { modules } = req.body;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Validate modules data
+    if (!modules) {
+      return res.status(400).json({
+        success: false,
+        message: "Modules data is required",
+      });
+    }
+
+    // Parse modules data if it's a string
+    let modulesData = modules;
+    if (typeof modules === "string") {
+      try {
+        modulesData = JSON.parse(modules);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid modules data format",
+          error: e.message,
+        });
+      }
+    }
+
+    // Validate modules structure
+    if (!Array.isArray(modulesData)) {
+      return res.status(400).json({
+        success: false,
+        message: "Modules must be an array",
+      });
+    }
+
+    // Validate each module
+    for (const module of modulesData) {
+      if (!module.title || !module.description) {
+        return res.status(400).json({
+          success: false,
+          message: "Each module must have a title and description",
+        });
+      }
+
+      // Validate lessons if they exist
+      if (module.lessons && Array.isArray(module.lessons)) {
+        for (const lesson of module.lessons) {
+          if (!lesson.name || !lesson.content || !lesson.videoUrl) {
+            return res.status(400).json({
+              success: false,
+              message: "Each lesson must have a name, content, and videoUrl",
+            });
+          }
+
+          // Validate duration
+          if (
+            !lesson.duration ||
+            typeof lesson.duration.hour !== "string" ||
+            typeof lesson.duration.min !== "string" ||
+            typeof lesson.duration.sec !== "string"
+          ) {
+            return res.status(400).json({
+              success: false,
+              message:
+                "Each lesson must have a valid duration with hour, min, and sec",
+            });
+          }
+        }
+      }
+    }
+
+    // Create update object - store modules directly at the top level
+    const updateData = {
+      modules: modulesData,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course modules updated successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error updating course modules:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update course modules",
+      error: error.message,
+    });
+  }
+});
+
+// Delete course modules
+router.delete("/:courseId/modules", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Create update object with empty modules array
+    const updateData = {
+      modules: [],
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course modules deleted successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting course modules:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete course modules",
+      error: error.message,
+    });
+  }
+});
+
 export default router;
