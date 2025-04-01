@@ -4,6 +4,7 @@ import authenticateUser from "../middlewares/auth.middleware.js";
 import { v2 as cloudinary } from "cloudinary";
 import multer from "multer";
 import fs from "fs";
+import { body, validationResult } from "express-validator";
 
 const router = express.Router();
 
@@ -371,5 +372,801 @@ router.post(
     }
   }
 );
+
+//course Details
+
+//update course sections
+router.put(
+  "/:courseId/sections",
+  authenticateUser,
+  [
+    // Validate the section type
+    body("sectionType")
+      .isIn(["description", "about", "outcomes", "courses", "course_info"])
+      .withMessage("Invalid section type"),
+
+    // Validate the section data exists
+    body("sectionData").notEmpty().withMessage("Section data is required"),
+  ],
+  async (req, res) => {
+    try {
+      // Check for validation errors
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: "Validation error",
+          errors: errors.array(),
+        });
+      }
+
+      const { courseId } = req.params;
+      const { sectionType, sectionData } = req.body;
+
+      // Check if course exists
+      const courseDoc = await admin
+        .firestore()
+        .collection("courses")
+        .doc(courseId)
+        .get();
+      if (!courseDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: "Course not found",
+        });
+      }
+
+      // Create update object with the specific section
+      const updateData = {
+        [sectionType]: sectionData,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      // Add updater info if available
+      if (req.user) {
+        updateData.updatedBy = {
+          uid: req.user.uid,
+          email: req.user.email,
+          ...(req.user.role && { role: req.user.role }),
+        };
+      }
+
+      // Update the course
+      await admin
+        .firestore()
+        .collection("courses")
+        .doc(courseId)
+        .update(updateData);
+
+      // Get the updated document
+      const updatedDoc = await admin
+        .firestore()
+        .collection("courses")
+        .doc(courseId)
+        .get();
+
+      res.status(200).json({
+        success: true,
+        message: `Course ${sectionType} updated successfully`,
+        data: {
+          documentId: updatedDoc.id,
+          ...updatedDoc.data(),
+        },
+      });
+    } catch (error) {
+      console.error(`Error updating course section:`, error);
+      res.status(500).json({
+        success: false,
+        message: `Failed to update course section`,
+        error: error.message,
+      });
+    }
+  }
+);
+
+// Add a specific endpoint for the about section
+router.put("/:courseId/about", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { about } = req.body;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Validate about data
+    if (!about) {
+      return res.status(400).json({
+        success: false,
+        message: "About data is required",
+      });
+    }
+
+    // Parse about data if it's a string
+    let aboutData = about;
+    if (typeof about === "string") {
+      try {
+        aboutData = JSON.parse(about);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid about data format",
+          error: e.message,
+        });
+      }
+    }
+
+    // Create update object
+    const updateData = {
+      about: aboutData,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course about section updated successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error updating course about section:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update course about section",
+      error: error.message,
+    });
+  }
+});
+
+// Update course description
+router.put("/:courseId/description", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { description } = req.body;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Create update object
+    const updateData = {
+      description: description || "",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course description updated successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error updating course description:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update course description",
+      error: error.message,
+    });
+  }
+});
+
+// Add a specific endpoint for the outcomes section
+router.put("/:courseId/outcomes", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { outcomes } = req.body;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Validate outcomes data
+    if (!outcomes) {
+      return res.status(400).json({
+        success: false,
+        message: "Outcomes data is required",
+      });
+    }
+
+    // Parse outcomes data if it's a string
+    let outcomesData = outcomes;
+    if (typeof outcomes === "string") {
+      try {
+        outcomesData = JSON.parse(outcomes);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid outcomes data format",
+          error: e.message,
+        });
+      }
+    }
+
+    // Create update object
+    const updateData = {
+      outcomes: outcomesData,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course outcomes updated successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error updating course outcomes:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update course outcomes",
+      error: error.message,
+    });
+  }
+});
+
+// Add a specific endpoint for the course_info section
+router.put("/:courseId/course_info", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const { course_info } = req.body;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Validate course_info data
+    if (!course_info) {
+      return res.status(400).json({
+        success: false,
+        message: "Course info data is required",
+      });
+    }
+
+    // Parse course_info data if it's a string
+    let courseInfoData = course_info;
+    if (typeof course_info === "string") {
+      try {
+        courseInfoData = JSON.parse(course_info);
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid course info data format",
+          error: e.message,
+        });
+      }
+    }
+
+    // Create update object
+    const updateData = {
+      course_info: courseInfoData,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course info updated successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error updating course info:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update course info",
+      error: error.message,
+    });
+  }
+});
+
+// Delete a specific section of a course
+router.delete(
+  "/:courseId/sections/:sectionType",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const { courseId, sectionType } = req.params;
+
+      // Validate section type
+      const validSections = [
+        "description",
+        "about",
+        "outcomes",
+        "courses",
+        "course_info",
+      ];
+      if (!validSections.includes(sectionType)) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid section type",
+        });
+      }
+
+      // Check if course exists
+      const courseDoc = await admin
+        .firestore()
+        .collection("courses")
+        .doc(courseId)
+        .get();
+      if (!courseDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: "Course not found",
+        });
+      }
+
+      // Create update object with empty value based on section type
+      let updateData = {
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      // Set appropriate empty value based on section type
+      switch (sectionType) {
+        case "description":
+          updateData.description = "";
+          break;
+        case "about":
+          updateData.about = { paragraphs: [] };
+          break;
+        case "outcomes":
+          updateData.outcomes = { intro: "", items: [] };
+          break;
+        case "courses":
+          updateData.courses = { modules: [] };
+          break;
+        case "course_info":
+          updateData.course_info = {
+            months: "",
+            weeklyHours: "",
+            schedule: "",
+            pace: "",
+            credential: "",
+          };
+          break;
+      }
+
+      // Add updater info if available
+      if (req.user) {
+        updateData.updatedBy = {
+          uid: req.user.uid,
+          email: req.user.email,
+          ...(req.user.role && { role: req.user.role }),
+        };
+      }
+
+      // Update the course
+      await admin
+        .firestore()
+        .collection("courses")
+        .doc(courseId)
+        .update(updateData);
+
+      // Get the updated document
+      const updatedDoc = await admin
+        .firestore()
+        .collection("courses")
+        .doc(courseId)
+        .get();
+
+      res.status(200).json({
+        success: true,
+        message: `Course ${sectionType} deleted successfully`,
+        data: {
+          documentId: updatedDoc.id,
+          ...updatedDoc.data(),
+        },
+      });
+    } catch (error) {
+      console.error(`Error deleting course section:`, error);
+      res.status(500).json({
+        success: false,
+        message: `Failed to delete course section`,
+        error: error.message,
+      });
+    }
+  }
+);
+
+// Specific endpoints for deleting individual sections
+// Delete course description
+router.delete("/:courseId/description", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Create update object
+    const updateData = {
+      description: "",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course description deleted successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting course description:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete course description",
+      error: error.message,
+    });
+  }
+});
+
+// Delete course about section
+router.delete("/:courseId/about", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Create update object
+    const updateData = {
+      about: { paragraphs: [] },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course about section deleted successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting course about section:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete course about section",
+      error: error.message,
+    });
+  }
+});
+
+// Delete course outcomes section
+router.delete("/:courseId/outcomes", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Create update object
+    const updateData = {
+      outcomes: { intro: "", items: [] },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course outcomes deleted successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting course outcomes:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete course outcomes",
+      error: error.message,
+    });
+  }
+});
+
+// Delete course_info section
+router.delete("/:courseId/course_info", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // Check if course exists
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Create update object with empty course_info
+    const updateData = {
+      course_info: {
+        months: "",
+        weeklyHours: "",
+        schedule: "",
+        pace: "",
+        credential: "",
+      },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add updater info if available
+    if (req.user) {
+      updateData.updatedBy = {
+        uid: req.user.uid,
+        email: req.user.email,
+        ...(req.user.role && { role: req.user.role }),
+      };
+    }
+
+    // Update the course
+    await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .update(updateData);
+
+    // Get the updated document
+    const updatedDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(courseId)
+      .get();
+
+    res.status(200).json({
+      success: true,
+      message: "Course info deleted successfully",
+      data: {
+        documentId: updatedDoc.id,
+        ...updatedDoc.data(),
+      },
+    });
+  } catch (error) {
+    console.error("Error deleting course info:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete course info",
+      error: error.message,
+    });
+  }
+});
 
 export default router;
