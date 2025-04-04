@@ -29,7 +29,7 @@ app.use("/api/batches", batchRoutes);
 
 // Basic route
 app.get("/", (req, res) => {
-  res.send("Backend is running!");
+  res.status(200).send("API is running");
 });
 
 const PORT = process.env.PORT || 5000;
