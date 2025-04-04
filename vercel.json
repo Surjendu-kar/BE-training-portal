@@ -1,8 +1,0 @@
-{
-  "version": 2,
-  "builds": [{ "src": "./server.js", "use": "@vercel/node" }],
-  "routes": [
-    { "src": "/favicon.ico", "dest": "/public/favicon.ico" },
-    { "src": "/(.*)", "dest": "/server.js" }
-  ]
-}
