@@ -12,7 +12,7 @@ const router = express.Router();
 const upload = multer({ dest: "uploads/" });
 
 // Get all courses
-router.get("/", async (req, res) => {
+router.get("/", authenticateUser, async (req, res) => {
   try {
     const coursesRef = admin.firestore().collection("courses");
     const snapshot = await coursesRef.get();
@@ -1173,7 +1173,15 @@ router.delete("/:courseId/course_info", authenticateUser, async (req, res) => {
 router.put("/:courseId/modules", authenticateUser, async (req, res) => {
   try {
     const { courseId } = req.params;
-    const { modules } = req.body;
+    const { modules } = req.body; // Extract modules from the request body
+
+    // Validate modules data
+    if (!modules || !Array.isArray(modules)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid modules data. Modules must be an array.",
+      });
+    }
 
     // Check if course exists
     const courseDoc = await admin
@@ -1181,6 +1189,7 @@ router.put("/:courseId/modules", authenticateUser, async (req, res) => {
       .collection("courses")
       .doc(courseId)
       .get();
+
     if (!courseDoc.exists) {
       return res.status(404).json({
         success: false,
@@ -1188,79 +1197,13 @@ router.put("/:courseId/modules", authenticateUser, async (req, res) => {
       });
     }
 
-    // Validate modules data
-    if (!modules) {
-      return res.status(400).json({
-        success: false,
-        message: "Modules data is required",
-      });
-    }
-
-    // Parse modules data if it's a string
-    let modulesData = modules;
-    if (typeof modules === "string") {
-      try {
-        modulesData = JSON.parse(modules);
-      } catch (e) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid modules data format",
-          error: e.message,
-        });
-      }
-    }
-
-    // Validate modules structure
-    if (!Array.isArray(modulesData)) {
-      return res.status(400).json({
-        success: false,
-        message: "Modules must be an array",
-      });
-    }
-
-    // Validate each module
-    for (const module of modulesData) {
-      if (!module.title || !module.description) {
-        return res.status(400).json({
-          success: false,
-          message: "Each module must have a title and description",
-        });
-      }
-
-      // Validate lessons if they exist
-      if (module.lessons && Array.isArray(module.lessons)) {
-        for (const lesson of module.lessons) {
-          if (!lesson.name || !lesson.content || !lesson.videoUrl) {
-            return res.status(400).json({
-              success: false,
-              message: "Each lesson must have a name, content, and videoUrl",
-            });
-          }
-
-          // Validate duration
-          if (
-            !lesson.duration ||
-            typeof lesson.duration.hour !== "string" ||
-            typeof lesson.duration.min !== "string" ||
-            typeof lesson.duration.sec !== "string"
-          ) {
-            return res.status(400).json({
-              success: false,
-              message:
-                "Each lesson must have a valid duration with hour, min, and sec",
-            });
-          }
-        }
-      }
-    }
-
-    // Create update object - store modules directly at the top level
+    // Add updater info
     const updateData = {
-      modules: modulesData,
+      modules: modules,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
-    // Add updater info if available
+    // Add user info if available
     if (req.user) {
       updateData.updatedBy = {
         uid: req.user.uid,
@@ -1361,6 +1304,38 @@ router.delete("/:courseId/modules", authenticateUser, async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to delete course modules",
+      error: error.message,
+    });
+  }
+});
+
+// Get course modules
+router.get("/:courseId/modules", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    const courseRef = admin.firestore().collection("courses").doc(courseId);
+    const courseDoc = await courseRef.get();
+
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    const courseData = courseDoc.data();
+
+    // Return the modules data if it exists
+    res.status(200).json({
+      success: true,
+      data: courseData.modules || [],
+    });
+  } catch (error) {
+    console.error("Error getting course modules:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get course modules",
       error: error.message,
     });
   }
