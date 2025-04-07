@@ -8,7 +8,15 @@ dotenv.config();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin:
+      process.env.NODE_ENV === "production"
+        ? process.env.FRONTEND_URL
+        : "http://localhost:3000",
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -19,6 +27,8 @@ import authRoutes from "./routes/auth.routes.js";
 import roleRoutes from "./routes/role.routes.js";
 import courseRoutes from "./routes/course.routes.js";
 import batchRoutes from "./routes/batch.routes.js";
+import paymentRoutes from "./routes/payment.routes.js";
+
 // Apply routes
 app.use("/api/test", testRoutes);
 app.use("/api", uploadRoutes);
@@ -26,6 +36,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/roles", roleRoutes);
 app.use("/api/courses", courseRoutes);
 app.use("/api/batches", batchRoutes);
+app.use("/api/payments", paymentRoutes);
 
 // Basic route
 app.get("/", (req, res) => {
