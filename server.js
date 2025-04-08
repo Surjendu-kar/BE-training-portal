@@ -12,7 +12,7 @@ app.use(
   cors({
     origin:
       process.env.NODE_ENV === "production"
-        ? "https://iqnaut-training-portal.web.app/"
+        ? "https://iqnaut-training-portal.web.app"
         : "http://localhost:3000",
     credentials: true,
   })
