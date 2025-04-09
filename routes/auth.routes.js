@@ -234,12 +234,57 @@ router.post("/verify-token", async (req, res) => {
 });
 
 // Protected endpoint to test authentication middleware
-router.get("/profile", authenticateUser, (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: "Authentication successful",
-    user: req.user,
-  });
+// Updated profile endpoint
+router.get("/profile", authenticateUser, async (req, res) => {
+  try {
+    // req.user contains decoded token info from the middleware
+    const uid = req.user.uid || req.user.user_id;
+
+    if (!uid) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID not found in token",
+      });
+    }
+
+    // Fetch complete user data from Firestore
+    const userDoc = await admin
+      .firestore()
+      .collection("user_manage")
+      .doc(uid)
+      .get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "User profile not found in database",
+      });
+    }
+
+    // Combine Firestore data with token data
+    const userData = userDoc.data();
+
+    res.status(200).json({
+      success: true,
+      message: "Profile retrieved successfully",
+      user: {
+        uid: uid,
+        email: userData.email || req.user.email,
+        fullName: userData.fullName,
+        role: userData.role || "Trainee",
+        photoURL: req.user.picture || userData.photoURL,
+        emailVerified: req.user.email_verified || false,
+        ...userData, // Include any other fields from Firestore
+      },
+    });
+  } catch (error) {
+    console.error("Error retrieving user profile:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to retrieve profile",
+      error: error.message,
+    });
+  }
 });
 
 // Get all users endpoint
