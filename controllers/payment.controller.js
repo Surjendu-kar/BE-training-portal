@@ -1,13 +1,21 @@
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import admin from "../config/firebase.config.js";
-import razorpayConfig from "../config/razorpay.config.js";
+import { getRazorpayConfig } from "../config/razorpay.config.js";
 
-// Initialize Razorpay
-const razorpay = new Razorpay({
-  key_id: razorpayConfig.key_id,
-  key_secret: razorpayConfig.key_secret,
-});
+let razorpay = null;
+
+// Initialize Razorpay instance
+async function getRazorpayInstance() {
+  if (!razorpay) {
+    const config = await getRazorpayConfig();
+    razorpay = new Razorpay({
+      key_id: config.key_id,
+      key_secret: config.key_secret,
+    });
+  }
+  return razorpay;
+}
 
 // Create a new order
 export const createOrder = async (req, res) => {
@@ -45,6 +53,10 @@ export const createOrder = async (req, res) => {
     // Create a unique receipt ID
     const receiptId = `receipt_${Date.now()}`;
 
+    // Get Razorpay instance and config
+    const razorpayInstance = await getRazorpayInstance();
+    const config = await getRazorpayConfig();
+
     // Create order in Razorpay
     const options = {
       amount: amountInPaise,
@@ -57,7 +69,7 @@ export const createOrder = async (req, res) => {
       },
     };
 
-    const order = await razorpay.orders.create(options);
+    const order = await razorpayInstance.orders.create(options);
 
     // Store order in Firestore for reference
     await admin
@@ -82,7 +94,7 @@ export const createOrder = async (req, res) => {
         orderId: order.id,
         amount: amount,
         currency: "INR",
-        key_id: razorpayConfig.key_id,
+        key_id: config.key_id,
       },
     });
   } catch (error) {
@@ -101,10 +113,13 @@ export const verifyPayment = async (req, res) => {
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
       req.body;
 
+    // Get Razorpay config
+    const config = await getRazorpayConfig();
+
     // Verify the payment signature
     const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSignature = crypto
-      .createHmac("sha256", razorpayConfig.key_secret)
+      .createHmac("sha256", config.key_secret)
       .update(body)
       .digest("hex");
 

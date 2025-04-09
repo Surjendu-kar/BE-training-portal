@@ -1,10 +1,17 @@
 // Razorpay configuration
-import dotenv from "dotenv";
-dotenv.config();
+import { getAppConfig } from "./app.config.js";
 
-const razorpayConfig = {
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-};
+let razorpayConfig = null;
 
-export default razorpayConfig;
+export async function getRazorpayConfig() {
+  if (!razorpayConfig) {
+    const config = await getAppConfig();
+    razorpayConfig = {
+      key_id: config.RAZORPAY_KEY_ID,
+      key_secret: config.RAZORPAY_KEY_SECRET,
+    };
+  }
+  return razorpayConfig;
+}
+
+export default getRazorpayConfig;
