@@ -20,8 +20,8 @@ async function getRazorpayInstance() {
 // Create a new order
 export const createOrder = async (req, res) => {
   try {
-    // Get the courseId, batchId, and userId from the request body
-    const { courseId, batchId, userId } = req.body;
+    // Get the courseId, batchId, userId, name and email from the request body
+    const { courseId, batchId, userId, name, email } = req.body;
 
     if (!courseId || !batchId) {
       return res.status(400).json({
@@ -81,6 +81,8 @@ export const createOrder = async (req, res) => {
         courseId: courseId,
         batchId: batchId,
         userId: userId || "guest",
+        userName: name || "",
+        userEmail: email || "",
         amount: amount,
         currency: "INR",
         receipt: receiptId,
@@ -142,9 +144,33 @@ export const verifyPayment = async (req, res) => {
 
       const orderData = orderDoc.data();
 
-      // Create enrollment record
+      // Fetch user details from user_manage collection
+      let userName = orderData.userName || "";
+      let userEmail = orderData.userEmail || "";
+
+      if (orderData.userId && orderData.userId !== "guest") {
+        try {
+          const userDoc = await admin
+            .firestore()
+            .collection("user_manage")
+            .doc(orderData.userId)
+            .get();
+
+          if (userDoc.exists) {
+            const userData = userDoc.data();
+            userName = userData.fullName || "";
+            userEmail = userData.email || userEmail;
+          }
+        } catch (error) {
+          console.warn("Could not fetch user details:", error);
+        }
+      }
+
+      // Create enrollment record with fresh user data
       const enrollmentData = {
         userId: orderData.userId,
+        userName: userName,
+        userEmail: userEmail,
         courseId: orderData.courseId,
         batchId: orderData.batchId,
         paymentId: razorpay_payment_id,
@@ -157,7 +183,7 @@ export const verifyPayment = async (req, res) => {
       // Save enrollment to Firestore
       await admin.firestore().collection("enrollments").add(enrollmentData);
 
-      // Update order status
+      // Update order status and user info
       await admin
         .firestore()
         .collection("payment_orders")
@@ -165,6 +191,8 @@ export const verifyPayment = async (req, res) => {
         .update({
           status: "paid",
           paymentId: razorpay_payment_id,
+          userName: userName,
+          userEmail: userEmail,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
 
@@ -273,6 +301,84 @@ export const getAllFees = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch course fees",
+      error: error.message,
+    });
+  }
+};
+
+// Get all payment records with details
+export const getAllPayments = async (req, res) => {
+  try {
+    // Optional query parameters for filtering
+    const { status, limit = 50 } = req.query;
+
+    // Start with enrollments collection (for completed payments)
+    let query = admin.firestore().collection("enrollments");
+
+    // Apply filters if provided
+    if (status === "completed") {
+      query = query.where("status", "==", "completed");
+    }
+
+    // Execute the query
+    const snapshot = await query.limit(parseInt(limit)).get();
+
+    // Process the results
+    const payments = [];
+
+    // Create an array of promises for the user, course, and batch lookups
+    const promises = snapshot.docs.map(async (doc) => {
+      const data = doc.data();
+
+      // Get course details
+      const courseDoc = await admin
+        .firestore()
+        .collection("courses")
+        .doc(data.courseId)
+        .get();
+      const courseData = courseDoc.exists ? courseDoc.data() : {};
+
+      // Get payment order details
+      const orderDoc = await admin
+        .firestore()
+        .collection("payment_orders")
+        .doc(data.orderId)
+        .get();
+      const orderData = orderDoc.exists ? orderDoc.data() : {};
+
+      payments.push({
+        id: doc.id,
+        traineeName: data.userName || "Unknown",
+        email: data.userEmail || "No Email",
+        courseName: courseData.title || "Unknown Course",
+        batchId: data.batchId || "Unknown",
+        amount: data.amount || 0,
+        paymentStatus: data.status || "Unknown",
+        transactionId: data.paymentId || "Unknown",
+        paymentDate: orderData.updatedAt
+          ? orderData.updatedAt.toDate().toISOString().split("T")[0]
+          : null,
+        paymentMode: "Online",
+        dueDate: "",
+        installments: "No",
+        remarks: "",
+      });
+    });
+
+    // Wait for all promises to resolve
+    await Promise.all(promises);
+
+    // Return the results
+    res.status(200).json({
+      success: true,
+      count: payments.length,
+      data: payments,
+    });
+  } catch (error) {
+    console.error("Error fetching payments:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch payments",
       error: error.message,
     });
   }
