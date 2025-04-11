@@ -29,6 +29,7 @@ import courseRoutes from "./routes/course.routes.js";
 import batchRoutes from "./routes/batch.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
+import enrollmentRoutes from "./routes/enrollment.routes.js";
 
 // Apply routes
 app.use("/api/test", testRoutes);
@@ -39,6 +40,7 @@ app.use("/api/courses", courseRoutes);
 app.use("/api/batches", batchRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/enrollments", enrollmentRoutes);
 
 // Basic route
 app.get("/", (req, res) => {
