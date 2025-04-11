@@ -28,6 +28,7 @@ import roleRoutes from "./routes/role.routes.js";
 import courseRoutes from "./routes/course.routes.js";
 import batchRoutes from "./routes/batch.routes.js";
 import paymentRoutes from "./routes/payment.routes.js";
+import attendanceRoutes from "./routes/attendance.routes.js";
 
 // Apply routes
 app.use("/api/test", testRoutes);
@@ -37,6 +38,7 @@ app.use("/api/roles", roleRoutes);
 app.use("/api/courses", courseRoutes);
 app.use("/api/batches", batchRoutes);
 app.use("/api/payments", paymentRoutes);
+app.use("/api/attendance", attendanceRoutes);
 
 // Basic route
 app.get("/", (req, res) => {

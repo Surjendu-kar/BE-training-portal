@@ -183,6 +183,46 @@ export const verifyPayment = async (req, res) => {
       // Save enrollment to Firestore
       await admin.firestore().collection("enrollments").add(enrollmentData);
 
+      // Add trainee to trainees collection
+      const traineesRef = admin
+        .firestore()
+        .collection("trainees")
+        .doc(orderData.batchId);
+      const traineesDoc = await traineesRef.get();
+
+      // Create a current timestamp
+      const now = new Date();
+
+      if (!traineesDoc.exists) {
+        // Create new document with first trainee
+        await traineesRef.set({
+          trainees: [
+            {
+              userId: orderData.userId,
+              name: userName,
+              email: userEmail,
+              enrolledAt: now,
+              courseId: orderData.courseId,
+              batchId: orderData.batchId,
+            },
+          ],
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(), // We can use serverTimestamp for top-level fields
+        });
+      } else {
+        // Add trainee to existing array if not already present
+        await traineesRef.update({
+          trainees: admin.firestore.FieldValue.arrayUnion({
+            userId: orderData.userId,
+            name: userName,
+            email: userEmail,
+            enrolledAt: now,
+            courseId: orderData.courseId,
+            batchId: orderData.batchId,
+          }),
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
       // Update order status and user info
       await admin
         .firestore()
