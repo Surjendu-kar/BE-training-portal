@@ -227,28 +227,62 @@ router.post("/", authenticateUser, async (req, res) => {
 
     // Determine the document ID to use
     let documentId;
+    let todayDate = "";
 
     if (providedDocumentId) {
       // If documentId is provided, use it (update case)
       documentId = providedDocumentId;
+      // Extract date part from the documentId (format: DD-MM-YY-batchId)
+      todayDate = providedDocumentId.split("-").slice(0, 3).join("-"); // e.g. "10-04-25"
     } else {
       // Otherwise generate a new ID based on current date (create case)
       const today = new Date();
-      documentId = `${today.getDate().toString().padStart(2, "0")}-${(
-        today.getMonth() + 1
-      )
-        .toString()
-        .padStart(2, "0")}-${today
-        .getFullYear()
-        .toString()
-        .slice(-2)}-${batchId}`;
+      const day = today.getDate().toString().padStart(2, "0");
+      const month = (today.getMonth() + 1).toString().padStart(2, "0");
+      const year = today.getFullYear().toString().slice(-2);
+
+      todayDate = `${day}-${month}-${year}`;
+      documentId = `${todayDate}-${batchId}`;
+    }
+
+    // Check if there's already an attendance record for today for this batch
+    // We need to do this before creating/updating the current record
+    // to determine if this is a new date's entry or just another entry for today
+    let isNewDateRecord = false;
+    let isFirstAttendanceForDay = true;
+
+    // Extract the date part from the proposed documentId
+    const datePartOfId = documentId.split("-").slice(0, 3).join("-"); // e.g. "10-04-25"
+
+    // Check for any existing attendance records for the same date
+    const existingRecordsQuery = await admin
+      .firestore()
+      .collection("attendance")
+      .where("batchId", "==", batchId)
+      .get();
+
+    if (!existingRecordsQuery.empty) {
+      existingRecordsQuery.forEach((doc) => {
+        // Extract date part from existing document IDs
+        const existingDocId = doc.id;
+        const existingDatePart = existingDocId.split("-").slice(0, 3).join("-");
+
+        // If the date matches our current operation date, this is not the first record for this day
+        if (existingDatePart === datePartOfId && existingDocId !== documentId) {
+          isFirstAttendanceForDay = false;
+        }
+      });
     }
 
     // Save to Firestore with the determined document ID
     const docRef = admin.firestore().collection("attendance").doc(documentId);
     const doc = await docRef.get();
 
+    let existingData = null;
+
     if (doc.exists) {
+      existingData = doc.data();
+
       // If document exists, update only necessary fields
       await docRef.update({
         courseId,
@@ -269,12 +303,88 @@ router.post("/", authenticateUser, async (req, res) => {
           ...(req.user.role && { role: req.user.role }),
         },
       });
+
+      // This is not a new date record, it's an update to an existing one
+      isNewDateRecord = false;
     } else {
       // If document doesn't exist, create new with all fields
       await docRef.set({
         ...attendanceRecord,
       });
+
+      // This is a new record, but we still need to check if it's the first for this day
+      isNewDateRecord = isFirstAttendanceForDay;
     }
+
+    // Create a batch to update all trainee attendance statistics
+    const batch = admin.firestore().batch();
+    const traineesRef = admin.firestore().collection("trainees").doc(batchId);
+
+    // Create a map to track which students were present/absent
+    const statusMap = {};
+    studentDetails.forEach((student) => {
+      statusMap[student.studentId] = student.status; // Store the actual status value "Present" or "Absent"
+    });
+
+    // Get the current trainees document to update their attendance stats
+    const updatedTrainees = enrolledTrainees.map((trainee) => {
+      // Skip update if this trainee isn't in the attendance record
+      if (!statusMap.hasOwnProperty(trainee.userId)) {
+        return trainee;
+      }
+
+      // Initialize attendance stats if they don't exist
+      if (!trainee.totalPresent) trainee.totalPresent = 0;
+      if (!trainee.totalAbsent) trainee.totalAbsent = 0;
+
+      // If this is a new date record (first record for this day), count attendance
+      if (isNewDateRecord) {
+        // For a new date's attendance record, increment counters based on attendance status
+        if (statusMap[trainee.userId] === "Present") {
+          trainee.totalPresent += 1;
+        } else {
+          trainee.totalAbsent += 1;
+        }
+      }
+      // If updating an existing record for the same date
+      else if (existingData) {
+        // Get the existing student detail to see if status changed
+        const existingStudent = existingData.studentDetails.find(
+          (s) => s.studentId === trainee.userId
+        );
+
+        if (existingStudent) {
+          // If status changed from present to absent, decrement present and increment absent
+          if (
+            existingStudent.status === "Present" &&
+            statusMap[trainee.userId] === "Absent"
+          ) {
+            trainee.totalPresent = Math.max(0, trainee.totalPresent - 1);
+            trainee.totalAbsent += 1;
+          }
+          // If status changed from absent to present, increment present and decrement absent
+          else if (
+            existingStudent.status === "Absent" &&
+            statusMap[trainee.userId] === "Present"
+          ) {
+            trainee.totalPresent += 1;
+            trainee.totalAbsent = Math.max(0, trainee.totalAbsent - 1);
+          }
+          // If no change in status, do nothing
+        }
+      }
+
+      return trainee;
+    });
+
+    // Update the trainees document with the new attendance statistics
+    batch.update(traineesRef, {
+      trainees: updatedTrainees,
+      lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Commit the batch operation
+    await batch.commit();
 
     // Check if this was an update or create
     const isUpdate = doc.exists;
@@ -315,6 +425,50 @@ router.delete("/:recordId", authenticateUser, async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Attendance record not found",
+      });
+    }
+
+    const recordData = recordDoc.data();
+    const batchId = recordData.batchId;
+
+    // Get the trainees document to update their attendance stats
+    const traineesRef = admin.firestore().collection("trainees").doc(batchId);
+    const traineesDoc = await traineesRef.get();
+
+    if (traineesDoc.exists) {
+      const traineesData = traineesDoc.data();
+      const trainees = traineesData.trainees || [];
+
+      // Create a map of student statuses from the attendance record
+      const studentStatusMap = {};
+      recordData.studentDetails.forEach((student) => {
+        studentStatusMap[student.studentId] = student.status;
+      });
+
+      // Update trainee statistics
+      const updatedTrainees = trainees.map((trainee) => {
+        if (!studentStatusMap.hasOwnProperty(trainee.userId)) {
+          return trainee;
+        }
+
+        // Initialize attendance stats if they don't exist
+        if (!trainee.totalPresent) trainee.totalPresent = 0;
+        if (!trainee.totalAbsent) trainee.totalAbsent = 0;
+
+        // Decrement the appropriate counter based on the student's status in the deleted record
+        if (studentStatusMap[trainee.userId] === "Present") {
+          trainee.totalPresent = Math.max(0, trainee.totalPresent - 1);
+        } else {
+          trainee.totalAbsent = Math.max(0, trainee.totalAbsent - 1);
+        }
+
+        return trainee;
+      });
+
+      // Update the trainees document
+      await traineesRef.update({
+        trainees: updatedTrainees,
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
       });
     }
 
