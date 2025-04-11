@@ -76,9 +76,14 @@ router.get("/:recordId", authenticateUser, async (req, res) => {
 // Create attendance record (acts as upsert - will update if record exists for same day and batch)
 router.post("/", authenticateUser, async (req, res) => {
   try {
-    const { courseId, batchId, date, studentDetails } = req.body;
+    const {
+      courseId,
+      batchId,
+      studentDetails,
+      documentId: providedDocumentId,
+    } = req.body;
 
-    if (!courseId || !batchId || !date || !studentDetails) {
+    if (!courseId || !batchId || !studentDetails) {
       return res.status(400).json({
         success: false,
         message: "Missing required fields",
@@ -203,9 +208,6 @@ router.post("/", authenticateUser, async (req, res) => {
       courseId,
       courseName: courseDoc.data().title,
       batchId,
-      date: admin.firestore.Timestamp.fromDate(
-        new Date(`${date}T00:00:00.000Z`)
-      ),
       totalStudents,
       presentStudents,
       absentStudents,
@@ -223,24 +225,43 @@ router.post("/", authenticateUser, async (req, res) => {
       },
     };
 
-    // Save to Firestore
-    const today = new Date();
-    const documentId = `${today.getDate().toString().padStart(2, "0")}-${(
-      today.getMonth() + 1
-    )
-      .toString()
-      .padStart(2, "0")}-${today
-      .getFullYear()
-      .toString()
-      .slice(-2)}-${batchId}`;
+    // Determine the document ID to use
+    let documentId;
 
-    // Save to Firestore with custom document ID (will update if exists)
-    const docRef = await admin
-      .firestore()
-      .collection("attendance")
-      .doc(documentId)
-      .set({
-        ...attendanceRecord,
+    if (providedDocumentId) {
+      // If documentId is provided, use it (update case)
+      documentId = providedDocumentId;
+    } else {
+      // Otherwise generate a new ID based on current date (create case)
+      const today = new Date();
+      documentId = `${today.getDate().toString().padStart(2, "0")}-${(
+        today.getMonth() + 1
+      )
+        .toString()
+        .padStart(2, "0")}-${today
+        .getFullYear()
+        .toString()
+        .slice(-2)}-${batchId}`;
+    }
+
+    // Save to Firestore with the determined document ID
+    const docRef = admin.firestore().collection("attendance").doc(documentId);
+    const doc = await docRef.get();
+
+    if (doc.exists) {
+      // If document exists, update only necessary fields
+      await docRef.update({
+        courseId,
+        courseName: courseDoc.data().title,
+        batchId,
+        totalStudents,
+        presentStudents,
+        absentStudents,
+        studentDetails: studentDetails.map((student) => ({
+          studentId: student.studentId,
+          name: student.name,
+          status: student.status || "Absent",
+        })),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedBy: {
           uid: req.user.uid,
@@ -248,11 +269,15 @@ router.post("/", authenticateUser, async (req, res) => {
           ...(req.user.role && { role: req.user.role }),
         },
       });
+    } else {
+      // If document doesn't exist, create new with all fields
+      await docRef.set({
+        ...attendanceRecord,
+      });
+    }
 
     // Check if this was an update or create
-    const isUpdate = (
-      await admin.firestore().collection("attendance").doc(documentId).get()
-    ).exists;
+    const isUpdate = doc.exists;
 
     res.status(isUpdate ? 200 : 201).json({
       success: true,
