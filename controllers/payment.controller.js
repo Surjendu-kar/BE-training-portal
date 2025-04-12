@@ -177,6 +177,7 @@ export const verifyPayment = async (req, res) => {
         orderId: razorpay_order_id,
         amount: orderData.amount,
         status: "completed",
+        receipt: orderData.receipt,
         enrolledAt: admin.firestore.FieldValue.serverTimestamp(),
       };
 
@@ -386,6 +387,29 @@ export const getAllPayments = async (req, res) => {
         .get();
       const orderData = orderDoc.exists ? orderDoc.data() : {};
 
+      // If enrollment doesn't have receipt but order does, update the enrollment
+      if (
+        !data.receipt &&
+        orderData.receipt &&
+        req.query.updateReceipts === "true"
+      ) {
+        try {
+          await admin
+            .firestore()
+            .collection("enrollments")
+            .doc(doc.id)
+            .update({ receipt: orderData.receipt });
+
+          // Update local data object
+          data.receipt = orderData.receipt;
+        } catch (updateError) {
+          console.warn(
+            `Failed to update receipt for enrollment ${doc.id}:`,
+            updateError
+          );
+        }
+      }
+
       payments.push({
         id: doc.id,
         traineeName: data.userName || "Unknown",
@@ -395,6 +419,7 @@ export const getAllPayments = async (req, res) => {
         amount: data.amount || 0,
         paymentStatus: data.status || "Unknown",
         transactionId: data.paymentId || "Unknown",
+        receiptId: data.receipt || orderData.receipt || "",
         paymentDate: orderData.updatedAt
           ? orderData.updatedAt.toDate().toISOString().split("T")[0]
           : null,
@@ -419,6 +444,115 @@ export const getAllPayments = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch payments",
+      error: error.message,
+    });
+  }
+};
+
+// Generate and download payment receipt
+export const downloadReceipt = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+
+    // Get payment details from Firestore
+    const paymentDoc = await admin
+      .firestore()
+      .collection("enrollments")
+      .doc(paymentId)
+      .get();
+
+    if (!paymentDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment record not found",
+      });
+    }
+
+    const paymentData = paymentDoc.data();
+
+    // Get payment order details to fetch receipt info
+    const orderDoc = await admin
+      .firestore()
+      .collection("payment_orders")
+      .doc(paymentData.orderId)
+      .get();
+
+    const orderData = orderDoc.exists ? orderDoc.data() : {};
+
+    // Get course details
+    const courseDoc = await admin
+      .firestore()
+      .collection("courses")
+      .doc(paymentData.courseId)
+      .get();
+    const courseData = courseDoc.exists ? courseDoc.data() : {};
+
+    // Generate PDF receipt
+    const PDFDocument = (await import("pdfkit")).default;
+    const doc = new PDFDocument({ margin: 50 });
+
+    // Set response headers for PDF download
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=receipt-${paymentId}.pdf`
+    );
+
+    // Pipe the PDF directly to the response
+    doc.pipe(res);
+
+    // Use the stored receipt ID or generate a fallback
+    const receiptNumber =
+      paymentData.receipt ||
+      orderData.receipt ||
+      `REC-${Date.now().toString().slice(-6)}`;
+    const date = new Date().toISOString().split("T")[0];
+
+    // Add logo or header
+    doc.fontSize(20).text("PAYMENT RECEIPT", { align: "center" });
+    doc.moveDown();
+
+    // Add a horizontal line
+    doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+    doc.moveDown();
+
+    // Receipt details
+    doc.fontSize(12);
+    doc.text(`Receipt Number: ${receiptNumber}`, { align: "right" });
+    doc.text(`Date: ${date}`, { align: "right" });
+    doc.moveDown();
+
+    // Customer information
+    doc.fontSize(14).text("Customer Information", { underline: true });
+    doc.fontSize(12);
+    doc.text(`Name: ${paymentData.userName || "N/A"}`);
+    doc.text(`Email: ${paymentData.userEmail || "N/A"}`);
+    doc.moveDown();
+
+    // Payment details
+    doc.fontSize(14).text("Payment Details", { underline: true });
+    doc.fontSize(12);
+    doc.text(`Course: ${courseData.title || "Course"}`);
+    doc.text(`Amount: Rs. ${paymentData.amount}`);
+    doc.text(`Payment ID: ${paymentData.paymentId || "N/A"}`);
+    doc.text(`Payment Status: ${paymentData.status || "N/A"}`);
+    doc.text(`Payment Mode: Online`);
+    doc.moveDown(2);
+
+    // Add a thank you note
+    doc.fontSize(10).text("Thank you for your payment!", { align: "center" });
+    doc.text(
+      "This is a computer-generated receipt and does not require a signature.",
+      { align: "center" }
+    );
+
+    // Finalize the PDF
+    doc.end();
+  } catch (error) {
+    console.error("Error generating receipt:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate receipt",
       error: error.message,
     });
   }

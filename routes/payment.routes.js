@@ -5,6 +5,7 @@ import {
   getPaymentStatus,
   getAllFees,
   getAllPayments,
+  downloadReceipt,
 } from "../controllers/payment.controller.js";
 import authenticateUser from "../middlewares/auth.middleware.js";
 
@@ -24,5 +25,8 @@ router.get("/fees", authenticateUser, getAllFees);
 
 // Get all payments with details
 router.get("/all-payments", authenticateUser, getAllPayments);
+
+// Download payment receipt
+router.get("/receipt/:paymentId", authenticateUser, downloadReceipt);
 
 export default router;
