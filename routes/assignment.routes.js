@@ -617,17 +617,20 @@ router.post(
       const { traineeId, email, name, selectedAnswers, score, submittedAt } =
         req.body;
 
-      if (
-        !documentId ||
-        !assignmentName ||
-        !traineeId ||
-        !email ||
-        !selectedAnswers ||
-        !score
-      ) {
+      // More detailed validation
+      const missingFields = [];
+      if (!documentId) missingFields.push("documentId");
+      if (!assignmentName) missingFields.push("assignmentName");
+      if (!traineeId) missingFields.push("traineeId");
+      if (!email) missingFields.push("email");
+      if (!Array.isArray(selectedAnswers) || selectedAnswers.length === 0)
+        missingFields.push("selectedAnswers");
+      if (score === undefined || score === null) missingFields.push("score");
+
+      if (missingFields.length > 0) {
         return res.status(400).json({
           success: false,
-          message: "Missing required fields",
+          message: `Missing required fields: ${missingFields.join(", ")}`,
         });
       }
 
