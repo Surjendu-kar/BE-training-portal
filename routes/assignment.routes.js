@@ -48,14 +48,6 @@ router.get("/", authenticateUser, async (req, res) => {
       }
     }
 
-    console.log(
-      "Sending assignments:",
-      assignments.map((a) => ({
-        name: a.assignmentName,
-        batchId: a.batchId,
-      }))
-    );
-
     res.status(200).json({
       success: true,
       data: assignments,
@@ -455,6 +447,293 @@ router.delete(
       res.status(500).json({
         success: false,
         message: "Failed to delete assignment",
+        error: error.message,
+      });
+    }
+  }
+);
+
+// Get user's batches
+router.get("/user-batches", authenticateUser, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const userEmail = req.user.email.toLowerCase();
+
+    // Get all trainee documents
+    const traineesRef = admin.firestore().collection("trainees");
+    const snapshot = await traineesRef.get();
+
+    if (snapshot.empty) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const userBatches = [];
+
+    // Check each batch document for the user
+    for (const doc of snapshot.docs) {
+      const batchData = doc.data();
+      const trainees = batchData.trainees || [];
+
+      // Check if user exists in this batch - case insensitive email comparison
+      const userInBatch = trainees.find(
+        (trainee) =>
+          trainee.userId === userId && trainee.email.toLowerCase() === userEmail
+      );
+
+      if (userInBatch) {
+        userBatches.push({
+          docId: doc.id,
+          fullBatchId: userInBatch.batchId,
+        });
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: userBatches,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch user's batches",
+      error: error.message,
+    });
+  }
+});
+
+// Get assignments for trainee
+router.get("/trainee", authenticateUser, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const userEmail = req.user.email.toLowerCase();
+
+    // First get user's batches
+    const traineesRef = admin.firestore().collection("trainees");
+    const snapshot = await traineesRef.get();
+
+    if (snapshot.empty) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const userBatchIds = [];
+
+    // Find all batches the user is enrolled in
+    for (const doc of snapshot.docs) {
+      const batchData = doc.data();
+      const trainees = batchData.trainees || [];
+
+      // Case insensitive email comparison
+      const userInBatch = trainees.find(
+        (trainee) =>
+          trainee.userId === userId && trainee.email.toLowerCase() === userEmail
+      );
+
+      if (userInBatch) {
+        userBatchIds.push({
+          docId: doc.id,
+          fullBatchId: userInBatch.batchId,
+        });
+      }
+    }
+
+    if (userBatchIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+      });
+    }
+
+    // Get assignments for user's batches
+    const assignmentsRef = admin.firestore().collection("assignments");
+    const assignmentsSnapshot = await assignmentsRef.get();
+
+    if (assignmentsSnapshot.empty) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+      });
+    }
+
+    const assignments = [];
+
+    // Filter assignments by user's batches
+    for (const doc of assignmentsSnapshot.docs) {
+      const documentData = doc.data();
+      const documentFields = Object.keys(documentData);
+
+      for (const field of documentFields) {
+        if (
+          field !== "createdAt" &&
+          field !== "updatedAt" &&
+          field !== "batchId"
+        ) {
+          const assignmentData = documentData[field];
+
+          // Check if this assignment is for one of user's batches
+          const matchingBatch = userBatchIds.find(
+            (batch) =>
+              batch.docId === assignmentData.batchId ||
+              batch.fullBatchId === assignmentData.batchId
+          );
+
+          if (matchingBatch) {
+            assignments.push({
+              documentId: doc.id,
+              assignmentId: `${doc.id}-${field}`,
+              assignmentName: field,
+              ...assignmentData,
+            });
+          }
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: assignments,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch trainee assignments",
+      error: error.message,
+    });
+  }
+});
+
+// Submit an assignment
+router.post(
+  "/:documentId/:assignmentName/submit",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const { documentId, assignmentName } = req.params;
+      const { traineeId, email, name, selectedAnswers, score, submittedAt } =
+        req.body;
+
+      if (
+        !documentId ||
+        !assignmentName ||
+        !traineeId ||
+        !email ||
+        !selectedAnswers ||
+        !score
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing required fields",
+        });
+      }
+
+      // Get the assignment document
+      const assignmentRef = admin
+        .firestore()
+        .collection("assignments")
+        .doc(documentId);
+      const doc = await assignmentRef.get();
+
+      if (!doc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: "Assignment not found",
+        });
+      }
+
+      const assignmentData = doc.data();
+      const assignment = assignmentData[assignmentName];
+
+      if (!assignment) {
+        return res.status(404).json({
+          success: false,
+          message: "Assignment not found",
+        });
+      }
+
+      // Check if user has already submitted
+      const submissions = assignment.submissions || [];
+      const existingSubmission = submissions.find(
+        (sub) => sub.traineeId === traineeId
+      );
+
+      if (existingSubmission) {
+        return res.status(400).json({
+          success: false,
+          message: "You have already submitted this assignment",
+        });
+      }
+
+      // Add submission to assignment document
+      const updatedSubmissions = [
+        ...submissions,
+        {
+          traineeId,
+          email,
+          name,
+          selectedAnswers,
+          score,
+          submittedAt,
+        },
+      ];
+
+      // Update assignment document
+      await assignmentRef.update({
+        [`${assignmentName}.submissions`]: updatedSubmissions,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // Update trainee's scores in trainees collection
+      const traineesRef = admin
+        .firestore()
+        .collection("trainees")
+        .doc(assignment.batchId);
+      const traineesDoc = await traineesRef.get();
+
+      if (traineesDoc.exists) {
+        const traineesData = traineesDoc.data();
+        const trainees = traineesData.trainees || [];
+
+        // Find and update the trainee's scores
+        const updatedTrainees = trainees.map((trainee) => {
+          if (trainee.userId === traineeId) {
+            const scores = trainee.scores || [];
+            scores.push({
+              assignmentName,
+              assignmentId: `${documentId}-${assignmentName}`,
+              score: score.toString(),
+              courseName: assignment.courseName,
+              submittedAt,
+            });
+            return { ...trainee, scores };
+          }
+          return trainee;
+        });
+
+        // Update trainees document
+        await traineesRef.update({
+          trainees: updatedTrainees,
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: "Assignment submitted successfully",
+        data: {
+          score,
+          submittedAt,
+        },
+      });
+    } catch (error) {
+      console.error("Error submitting assignment:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to submit assignment",
         error: error.message,
       });
     }
