@@ -31,6 +31,7 @@ import paymentRoutes from "./routes/payment.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
 import enrollmentRoutes from "./routes/enrollment.routes.js";
 import assignmentRoutes from "./routes/assignment.routes.js";
+import rankingRoutes from "./routes/ranking.routes.js";
 
 // Apply routes
 app.use("/api/test", testRoutes);
@@ -43,6 +44,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/enrollments", enrollmentRoutes);
 app.use("/api/assignment", assignmentRoutes);
+app.use("/api/ranking", rankingRoutes);
 
 // Basic route
 app.get("/", (req, res) => {
