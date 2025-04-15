@@ -1341,4 +1341,212 @@ router.get("/:courseId/modules", authenticateUser, async (req, res) => {
   }
 });
 
+// Add testimonial to a course
+router.post("/:courseId/testimonials", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const testimonialData = req.body;
+
+    // Validate required fields
+    if (!testimonialData.comment || !testimonialData.rating) {
+      return res.status(400).json({
+        success: false,
+        message: "Comment and rating are required fields",
+      });
+    }
+
+    // Get the course document
+    const courseRef = admin.firestore().collection("courses").doc(courseId);
+    const courseDoc = await courseRef.get();
+
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    // Add user info and timestamps
+    const newTestimonial = {
+      ...testimonialData,
+      userId: testimonialData.userId || req.user.uid,
+      name: testimonialData.name || req.user.displayName || "Anonymous",
+      email: testimonialData.email || req.user.email,
+      timestamp: testimonialData.timestamp || new Date().toISOString(),
+      date: testimonialData.date || new Date().toLocaleDateString(),
+      updatedAt: new Date().toISOString(), // Use ISO string instead of serverTimestamp
+    };
+
+    // Get current testimonials array or initialize if doesn't exist
+    const courseData = courseDoc.data();
+    const currentTestimonials = courseData.testimonials || [];
+
+    // Add new testimonial to array
+    const updatedTestimonials = [newTestimonial, ...currentTestimonials];
+
+    // Update the course document with the new testimonials array
+    // and use serverTimestamp only for the document's updatedAt field
+    await courseRef.update({
+      testimonials: updatedTestimonials,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Testimonial added successfully",
+      data: newTestimonial,
+    });
+  } catch (error) {
+    console.error("Error adding testimonial:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add testimonial",
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+});
+
+// Update a testimonial
+router.put(
+  "/:courseId/testimonials/:timestamp",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const { courseId, timestamp } = req.params;
+      const updatedData = req.body;
+
+      // Get the course
+      const courseRef = admin.firestore().collection("courses").doc(courseId);
+      const courseDoc = await courseRef.get();
+
+      if (!courseDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: "Course not found",
+        });
+      }
+
+      const courseData = courseDoc.data();
+      const testimonials = courseData.testimonials || [];
+
+      // Find the testimonial index
+      const testimonialIndex = testimonials.findIndex(
+        (t) => t.timestamp === timestamp
+      );
+
+      if (testimonialIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          message: "Testimonial not found",
+        });
+      }
+
+      // Check if user owns this testimonial
+      if (testimonials[testimonialIndex].userId !== req.user.uid) {
+        return res.status(403).json({
+          success: false,
+          message: "Not authorized to update this testimonial",
+        });
+      }
+
+      // Update the testimonial
+      const updatedTestimonial = {
+        ...testimonials[testimonialIndex],
+        ...updatedData,
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Replace the old testimonial with the updated one
+      testimonials[testimonialIndex] = updatedTestimonial;
+
+      // Update the course document
+      await courseRef.update({
+        testimonials: testimonials,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "Testimonial updated successfully",
+        data: updatedTestimonial,
+      });
+    } catch (error) {
+      console.error("Error updating testimonial:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to update testimonial",
+        error: error.message,
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+      });
+    }
+  }
+);
+
+// Delete a testimonial
+router.delete(
+  "/:courseId/testimonials/:timestamp",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const { courseId, timestamp } = req.params;
+
+      // Get the course
+      const courseRef = admin.firestore().collection("courses").doc(courseId);
+      const courseDoc = await courseRef.get();
+
+      if (!courseDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: "Course not found",
+        });
+      }
+
+      const courseData = courseDoc.data();
+      const testimonials = courseData.testimonials || [];
+
+      // Find the testimonial
+      const testimonialIndex = testimonials.findIndex(
+        (t) => t.timestamp === timestamp
+      );
+
+      if (testimonialIndex === -1) {
+        return res.status(404).json({
+          success: false,
+          message: "Testimonial not found",
+        });
+      }
+
+      // Check if user owns this testimonial
+      if (testimonials[testimonialIndex].userId !== req.user.uid) {
+        return res.status(403).json({
+          success: false,
+          message: "Not authorized to delete this testimonial",
+        });
+      }
+
+      // Remove the testimonial
+      testimonials.splice(testimonialIndex, 1);
+
+      // Update the course document
+      await courseRef.update({
+        testimonials: testimonials,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      res.status(200).json({
+        success: true,
+        message: "Testimonial deleted successfully",
+      });
+    } catch (error) {
+      console.error("Error deleting testimonial:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to delete testimonial",
+        error: error.message,
+      });
+    }
+  }
+);
+
 export default router;
