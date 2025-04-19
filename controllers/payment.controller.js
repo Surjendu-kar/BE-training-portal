@@ -413,6 +413,46 @@ export const getAllPayments = async (req, res) => {
         }
       }
 
+      // Handle transaction IDs based on payment status
+      let transactionId = data.paymentId || "Unknown";
+      let paymentDate = orderData.updatedAt
+        ? formatDate(orderData.updatedAt.toDate().toISOString().split("T")[0])
+        : data.paymentDate
+        ? formatDate(data.paymentDate)
+        : data.enrolledAt
+        ? formatDate(
+            new Date(data.enrolledAt.seconds * 1000).toISOString().split("T")[0]
+          )
+        : null;
+
+      if (data.status === "partial" && data.installmentDetails) {
+        // For partial payments, show both transaction IDs if available
+        const installment1Id =
+          data.installmentDetails.installment1?.transactionId || "";
+        const installment2Id =
+          data.installmentDetails.installment2?.transactionId || "";
+
+        if (installment1Id && installment2Id) {
+          transactionId = `${installment1Id}, ${installment2Id}`;
+        } else if (installment1Id) {
+          transactionId = installment1Id;
+        }
+
+        // Handle payment dates for installments
+        const installment1Date = data.installmentDetails.installment1?.date
+          ? formatDate(data.installmentDetails.installment1.date)
+          : "";
+        const installment2Date = data.installmentDetails.installment2?.date
+          ? formatDate(data.installmentDetails.installment2.date)
+          : "";
+
+        if (installment1Date && installment2Date) {
+          paymentDate = `${installment1Date}, ${installment2Date}`;
+        } else if (installment1Date) {
+          paymentDate = installment1Date;
+        }
+      }
+
       payments.push({
         id: doc.id,
         traineeName: data.userName || "Unknown",
@@ -421,20 +461,13 @@ export const getAllPayments = async (req, res) => {
         batchId: data.batchId || "Unknown",
         amount: data.amount || 0,
         paymentStatus: data.status || "Unknown",
-        transactionId: data.paymentId || "Unknown",
+        transactionId: transactionId,
         receiptId: data.receipt || orderData.receipt || "",
-        paymentDate: orderData.updatedAt
-          ? orderData.updatedAt.toDate().toISOString().split("T")[0]
-          : data.paymentDate ||
-            (data.enrolledAt
-              ? new Date(data.enrolledAt.seconds * 1000)
-                  .toISOString()
-                  .split("T")[0]
-              : null),
+        paymentDate: paymentDate,
         paymentMode: data.paymentMode || "Online",
         dueDate: "",
         installments: data.installments || "No",
-        remarks: "",
+        installmentDetails: data.installmentDetails || null,
       });
     });
 
@@ -455,6 +488,13 @@ export const getAllPayments = async (req, res) => {
       error: error.message,
     });
   }
+};
+
+// Helper function to format date to DD-MM-YYYY
+const formatDate = (dateString) => {
+  if (!dateString) return "";
+  const [year, month, day] = dateString.split("-");
+  return `${day}-${month}-${year}`;
 };
 
 // Generate and download payment receipt
@@ -605,9 +645,11 @@ export const addManualPayment = async (req, res) => {
       paymentDate,
       paymentMode,
       installments,
+      installmentDetails,
+      ...otherFields
     } = req.body;
 
-    // Create enrollment record
+    // Create enrollment record with basic fields
     const enrollmentData = {
       userId,
       userName,
@@ -616,12 +658,51 @@ export const addManualPayment = async (req, res) => {
       batchId,
       amount,
       status,
-      paymentId,
-      paymentDate,
       paymentMode,
       installments,
       enrolledAt: admin.firestore.FieldValue.serverTimestamp(),
     };
+
+    // Handle installment details in a cleaner way
+    if (installmentDetails) {
+      enrollmentData.installmentDetails = {
+        installment1: {
+          amount: installmentDetails.installment1.amount,
+          date: installmentDetails.installment1.date,
+          transactionId: installmentDetails.installment1.transactionId,
+        },
+      };
+
+      if (installmentDetails.installment2?.amount > 0) {
+        enrollmentData.installmentDetails.installment2 = {
+          amount: installmentDetails.installment2.amount,
+          date: installmentDetails.installment2.date,
+          transactionId: installmentDetails.installment2.transactionId,
+        };
+      }
+
+      // Set payment date and transaction ID based on installments
+      const dates = [];
+      const transactionIds = [];
+
+      dates.push(installmentDetails.installment1.date);
+      transactionIds.push(installmentDetails.installment1.transactionId);
+
+      if (installmentDetails.installment2?.amount > 0) {
+        dates.push(installmentDetails.installment2.date);
+        transactionIds.push(installmentDetails.installment2.transactionId);
+      }
+
+      enrollmentData.paymentDate = dates.join(", ");
+      enrollmentData.paymentId = transactionIds.join(", ");
+    } else {
+      // For non-installment payments
+      enrollmentData.paymentDate = paymentDate;
+      enrollmentData.paymentId = paymentId;
+    }
+
+    // Add orderId for manual payments
+    enrollmentData.orderId = `MANUAL-${Date.now()}`;
 
     // Add to enrollments collection
     const enrollmentRef = await admin
@@ -636,7 +717,6 @@ export const addManualPayment = async (req, res) => {
     const now = new Date();
 
     if (!traineesDoc.exists) {
-      // Create new document with first trainee
       await traineesRef.set({
         trainees: [
           {
@@ -651,7 +731,6 @@ export const addManualPayment = async (req, res) => {
         lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
       });
     } else {
-      // Add trainee to existing array if not already present
       await traineesRef.update({
         trainees: admin.firestore.FieldValue.arrayUnion({
           userId,
@@ -677,6 +756,139 @@ export const addManualPayment = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to add payment",
+      error: error.message,
+    });
+  }
+};
+
+// Update payment details
+export const updatePayment = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const {
+      amount,
+      paymentStatus,
+      transactionId,
+      paymentDate,
+      paymentMode,
+      installments,
+      installmentDetails,
+      ...otherFields
+    } = req.body;
+
+    // Get payment document
+    const paymentRef = admin
+      .firestore()
+      .collection("enrollments")
+      .doc(paymentId);
+    const paymentDoc = await paymentRef.get();
+
+    if (!paymentDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment record not found",
+      });
+    }
+
+    // Prepare update data
+    const updateData = {
+      amount: parseFloat(amount),
+      status: paymentStatus.toLowerCase(),
+      paymentMode,
+      installments,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Handle installment details
+    if (installmentDetails) {
+      updateData.installmentDetails = {
+        installment1: {
+          amount: installmentDetails.installment1.amount,
+          date: installmentDetails.installment1.date,
+          transactionId: installmentDetails.installment1.transactionId,
+        },
+      };
+
+      if (installmentDetails.installment2?.amount > 0) {
+        updateData.installmentDetails.installment2 = {
+          amount: installmentDetails.installment2.amount,
+          date: installmentDetails.installment2.date,
+          transactionId: installmentDetails.installment2.transactionId,
+        };
+      }
+
+      // Set payment date and transaction ID based on installments
+      const dates = [];
+      const transactionIds = [];
+
+      dates.push(installmentDetails.installment1.date);
+      transactionIds.push(installmentDetails.installment1.transactionId);
+
+      if (installmentDetails.installment2?.amount > 0) {
+        dates.push(installmentDetails.installment2.date);
+        transactionIds.push(installmentDetails.installment2.transactionId);
+      }
+
+      updateData.paymentDate = dates.join(", ");
+      updateData.paymentId = transactionIds.join(", ");
+    } else {
+      // For non-installment payments
+      updateData.paymentDate = paymentDate;
+      updateData.paymentId = transactionId;
+    }
+
+    // Update the payment record
+    await paymentRef.update(updateData);
+
+    res.status(200).json({
+      success: true,
+      message: "Payment updated successfully",
+      data: {
+        id: paymentId,
+        ...updateData,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating payment:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update payment",
+      error: error.message,
+    });
+  }
+};
+
+// Get payment details by ID
+export const getPaymentDetails = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+
+    // Get payment document
+    const paymentRef = admin
+      .firestore()
+      .collection("enrollments")
+      .doc(paymentId);
+    const paymentDoc = await paymentRef.get();
+
+    if (!paymentDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment record not found",
+      });
+    }
+
+    // Return the payment data
+    const paymentData = paymentDoc.data();
+
+    res.status(200).json({
+      success: true,
+      data: paymentData,
+    });
+  } catch (error) {
+    console.error("Error getting payment details:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get payment details",
       error: error.message,
     });
   }
