@@ -6,6 +6,7 @@ import {
   getAllFees,
   getAllPayments,
   downloadReceipt,
+  addManualPayment,
 } from "../controllers/payment.controller.js";
 import authenticateUser from "../middlewares/auth.middleware.js";
 
@@ -28,5 +29,8 @@ router.get("/all-payments", authenticateUser, getAllPayments);
 
 // Download payment receipt
 router.get("/receipt/:paymentId", authenticateUser, downloadReceipt);
+
+// Add manual payment
+router.post("/manual-payment", authenticateUser, addManualPayment);
 
 export default router;

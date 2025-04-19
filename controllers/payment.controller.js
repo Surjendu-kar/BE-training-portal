@@ -379,13 +379,16 @@ export const getAllPayments = async (req, res) => {
         .get();
       const courseData = courseDoc.exists ? courseDoc.data() : {};
 
-      // Get payment order details
-      const orderDoc = await admin
-        .firestore()
-        .collection("payment_orders")
-        .doc(data.orderId)
-        .get();
-      const orderData = orderDoc.exists ? orderDoc.data() : {};
+      // Get payment order details - ONLY if orderId exists
+      let orderData = {};
+      if (data.orderId) {
+        const orderDoc = await admin
+          .firestore()
+          .collection("payment_orders")
+          .doc(data.orderId)
+          .get();
+        orderData = orderDoc.exists ? orderDoc.data() : {};
+      }
 
       // If enrollment doesn't have receipt but order does, update the enrollment
       if (
@@ -422,10 +425,15 @@ export const getAllPayments = async (req, res) => {
         receiptId: data.receipt || orderData.receipt || "",
         paymentDate: orderData.updatedAt
           ? orderData.updatedAt.toDate().toISOString().split("T")[0]
-          : null,
-        paymentMode: "Online",
+          : data.paymentDate ||
+            (data.enrolledAt
+              ? new Date(data.enrolledAt.seconds * 1000)
+                  .toISOString()
+                  .split("T")[0]
+              : null),
+        paymentMode: data.paymentMode || "Online",
         dueDate: "",
-        installments: "No",
+        installments: data.installments || "No",
         remarks: "",
       });
     });
@@ -470,14 +478,17 @@ export const downloadReceipt = async (req, res) => {
 
     const paymentData = paymentDoc.data();
 
-    // Get payment order details to fetch receipt info
-    const orderDoc = await admin
-      .firestore()
-      .collection("payment_orders")
-      .doc(paymentData.orderId)
-      .get();
+    // Get payment order details to fetch receipt info (only if orderId exists)
+    let orderData = {};
+    if (paymentData.orderId && !paymentData.orderId.startsWith("MANUAL-")) {
+      const orderDoc = await admin
+        .firestore()
+        .collection("payment_orders")
+        .doc(paymentData.orderId)
+        .get();
 
-    const orderData = orderDoc.exists ? orderDoc.data() : {};
+      orderData = orderDoc.exists ? orderDoc.data() : {};
+    }
 
     // Get course details
     const courseDoc = await admin
@@ -501,12 +512,25 @@ export const downloadReceipt = async (req, res) => {
     // Pipe the PDF directly to the response
     doc.pipe(res);
 
-    // Use the stored receipt ID or generate a fallback
-    const receiptNumber =
-      paymentData.receipt ||
-      orderData.receipt ||
-      `REC-${Date.now().toString().slice(-6)}`;
-    const date = new Date().toISOString().split("T")[0];
+    // Generate a consistent receipt number format for both Razorpay and manual payments
+    let receiptNumber;
+    if (orderData.receipt) {
+      // For Razorpay payments, use the existing receipt number
+      receiptNumber = orderData.receipt;
+      // Make sure it starts with receipt_ prefix
+      if (!receiptNumber.startsWith("receipt_")) {
+        receiptNumber = `receipt_${receiptNumber}`;
+      }
+    } else {
+      // For manual payments, use transaction ID with the same format as Razorpay
+      receiptNumber = `receipt_${
+        paymentData.paymentId || Date.now().toString()
+      }`;
+    }
+
+    // Use payment date from the payment data if it exists, otherwise current date
+    const receiptDate =
+      paymentData.paymentDate || new Date().toISOString().split("T")[0];
 
     // Add logo or header
     doc.fontSize(20).text("PAYMENT RECEIPT", { align: "center" });
@@ -519,7 +543,7 @@ export const downloadReceipt = async (req, res) => {
     // Receipt details
     doc.fontSize(12);
     doc.text(`Receipt Number: ${receiptNumber}`, { align: "right" });
-    doc.text(`Date: ${date}`, { align: "right" });
+    doc.text(`Date: ${receiptDate}`, { align: "right" });
     doc.moveDown();
 
     // Customer information
@@ -529,14 +553,22 @@ export const downloadReceipt = async (req, res) => {
     doc.text(`Email: ${paymentData.userEmail || "N/A"}`);
     doc.moveDown();
 
+    // Standardize payment status for display
+    let displayStatus = paymentData.status || "N/A";
+    if (displayStatus.toLowerCase() === "paid") {
+      displayStatus = "completed";
+    }
+
     // Payment details
     doc.fontSize(14).text("Payment Details", { underline: true });
     doc.fontSize(12);
-    doc.text(`Course: ${courseData.title || "Course"}`);
+    doc.text(
+      `Course: ${courseData?.title || courseData?.courseName || "Course"}`
+    );
     doc.text(`Amount: Rs. ${paymentData.amount}`);
     doc.text(`Payment ID: ${paymentData.paymentId || "N/A"}`);
-    doc.text(`Payment Status: ${paymentData.status || "N/A"}`);
-    doc.text(`Payment Mode: Online`);
+    doc.text(`Payment Status: ${displayStatus}`);
+    doc.text(`Payment Mode: ${paymentData.paymentMode || "Online"}`);
     doc.moveDown(2);
 
     // Add a thank you note
@@ -553,6 +585,98 @@ export const downloadReceipt = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to generate receipt",
+      error: error.message,
+    });
+  }
+};
+
+// Handle manual payment entry
+export const addManualPayment = async (req, res) => {
+  try {
+    const {
+      userId,
+      userName,
+      userEmail,
+      courseId,
+      batchId,
+      amount,
+      status,
+      paymentId,
+      paymentDate,
+      paymentMode,
+      installments,
+    } = req.body;
+
+    // Create enrollment record
+    const enrollmentData = {
+      userId,
+      userName,
+      userEmail,
+      courseId,
+      batchId,
+      amount,
+      status,
+      paymentId,
+      paymentDate,
+      paymentMode,
+      installments,
+      enrolledAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // Add to enrollments collection
+    const enrollmentRef = await admin
+      .firestore()
+      .collection("enrollments")
+      .add(enrollmentData);
+
+    // Add trainee to trainees collection
+    const traineesRef = admin.firestore().collection("trainees").doc(batchId);
+    const traineesDoc = await traineesRef.get();
+
+    const now = new Date();
+
+    if (!traineesDoc.exists) {
+      // Create new document with first trainee
+      await traineesRef.set({
+        trainees: [
+          {
+            userId,
+            name: userName,
+            email: userEmail,
+            enrolledAt: now,
+            courseId,
+            batchId,
+          },
+        ],
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } else {
+      // Add trainee to existing array if not already present
+      await traineesRef.update({
+        trainees: admin.firestore.FieldValue.arrayUnion({
+          userId,
+          name: userName,
+          email: userEmail,
+          enrolledAt: now,
+          courseId,
+          batchId,
+        }),
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Payment added successfully",
+      data: {
+        enrollmentId: enrollmentRef.id,
+      },
+    });
+  } catch (error) {
+    console.error("Error adding manual payment:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add payment",
       error: error.message,
     });
   }
