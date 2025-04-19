@@ -1549,4 +1549,49 @@ router.delete(
   }
 );
 
+// Get trainees for a specific course
+router.get("/:courseId/trainees", authenticateUser, async (req, res) => {
+  try {
+    const { courseId } = req.params;
+
+    // Get all trainee documentsnow
+    const traineesRef = admin.firestore().collection("trainees");
+    const snapshot = await traineesRef.get();
+
+    if (snapshot.empty) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+      });
+    }
+
+    // Filter for trainees in this course
+    const allTrainees = [];
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      // Check if this document has a trainees array
+      if (data.trainees && Array.isArray(data.trainees)) {
+        // Filter for trainees in this course
+        const courseTrainees = data.trainees.filter(
+          (trainee) => trainee.courseId === courseId
+        );
+        // Add them to the result
+        allTrainees.push(...courseTrainees);
+      }
+    });
+
+    res.status(200).json({
+      success: true,
+      data: allTrainees,
+    });
+  } catch (error) {
+    console.error("Error fetching course trainees:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch course trainees",
+      error: error.message,
+    });
+  }
+});
+
 export default router;
