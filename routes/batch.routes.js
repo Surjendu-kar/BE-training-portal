@@ -172,20 +172,59 @@ router.post("/", authenticateUser, async (req, res) => {
       });
     }
 
+    // Fetch the course to get its modules and lessons
+    const courseRef = admin
+      .firestore()
+      .collection("courses")
+      .doc(batchData.courseId);
+    const courseDoc = await courseRef.get();
+
+    if (!courseDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found",
+      });
+    }
+
+    const courseData = courseDoc.data();
+    const modules = courseData.modules || [];
+
+    // Initialize completedLessons with all lessons set to false
+    const completedLessons = {};
+    modules.forEach((module, moduleIndex) => {
+      if (module.lessons && module.lessons.length > 0) {
+        module.lessons.forEach((lesson, lessonIndex) => {
+          const lessonKey = `${moduleIndex}-${lessonIndex}`;
+          completedLessons[lessonKey] = false;
+        });
+      }
+    });
+
     const docRef = admin.firestore().collection("batches").doc(documentId);
     const docSnap = await docRef.get();
 
-    // Create a display batch field name with concatenated day-month format
-    const trainingStartDate = admin.firestore.Timestamp.fromDate(
-      new Date(batchDetails.trainingStartDate)
-    );
-    const internshipEndDate = admin.firestore.Timestamp.fromDate(
-      new Date(batchDetails.internshipEndDate)
-    );
+    // Convert date strings to Firestore timestamps
+    const batchDetailsWithTimestamps = {
+      ...batchDetails,
+      trainingStartDate: admin.firestore.Timestamp.fromDate(
+        new Date(batchDetails.trainingStartDate)
+      ),
+      trainingEndDate: admin.firestore.Timestamp.fromDate(
+        new Date(batchDetails.trainingEndDate)
+      ),
+      internshipStartDate: admin.firestore.Timestamp.fromDate(
+        new Date(batchDetails.internshipStartDate)
+      ),
+      internshipEndDate: admin.firestore.Timestamp.fromDate(
+        new Date(batchDetails.internshipEndDate)
+      ),
+    };
 
-    // Convert timestamps to dates for formatting
-    const trainingStartDateObj = trainingStartDate.toDate();
-    const internshipEndDateObj = internshipEndDate.toDate();
+    // Create a display batch field name with concatenated day-month format
+    const trainingStartDateObj =
+      batchDetailsWithTimestamps.trainingStartDate.toDate();
+    const internshipEndDateObj =
+      batchDetailsWithTimestamps.internshipEndDate.toDate();
 
     const trainingStartDay = trainingStartDateObj
       .getDate()
@@ -209,23 +248,6 @@ router.post("/", authenticateUser, async (req, res) => {
     // Create the display field name using concatenated format
     const displayBatchKey = `B-${courseAbbr}-${trainingStartDay}${trainingStartMonth}-${internshipEndDay}${internshipEndMonth}-${suffix}`;
 
-    // Convert date strings to Firestore timestamps
-    const batchDetailsWithTimestamps = {
-      ...batchDetails,
-      trainingStartDate: admin.firestore.Timestamp.fromDate(
-        new Date(batchDetails.trainingStartDate)
-      ),
-      trainingEndDate: admin.firestore.Timestamp.fromDate(
-        new Date(batchDetails.trainingEndDate)
-      ),
-      internshipStartDate: admin.firestore.Timestamp.fromDate(
-        new Date(batchDetails.internshipStartDate)
-      ),
-      internshipEndDate: admin.firestore.Timestamp.fromDate(
-        new Date(batchDetails.internshipEndDate)
-      ),
-    };
-
     if (docSnap.exists) {
       // Document exists, update it with the new batch
       await docRef.update({
@@ -236,6 +258,7 @@ router.post("/", authenticateUser, async (req, res) => {
           internshipStartDate: batchDetailsWithTimestamps.internshipStartDate,
           internshipEndDate: batchDetailsWithTimestamps.internshipEndDate,
           enrollLimit: batchDetailsWithTimestamps.enrollLimit,
+          completedLessons: completedLessons, // Automatically add initialized lessons
         },
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
@@ -254,6 +277,7 @@ router.post("/", authenticateUser, async (req, res) => {
           internshipStartDate: batchDetailsWithTimestamps.internshipStartDate,
           internshipEndDate: batchDetailsWithTimestamps.internshipEndDate,
           enrollLimit: batchDetailsWithTimestamps.enrollLimit,
+          completedLessons: completedLessons, // Automatically add initialized lessons
         },
       });
     }
@@ -589,7 +613,41 @@ router.put(
         });
       }
 
-      // Update the batch with completed lessons data
+      // Fetch the course to get total number of lessons
+      const courseRef = admin
+        .firestore()
+        .collection("courses")
+        .doc(existingBatchData.courseId);
+      const courseDoc = await courseRef.get();
+
+      if (!courseDoc.exists) {
+        return res.status(404).json({
+          success: false,
+          message: "Course not found",
+        });
+      }
+
+      const courseData = courseDoc.data();
+      const totalLessons = courseData.modules.reduce(
+        (total, module) => total + (module.lessons?.length || 0),
+        0
+      );
+
+      // Count completed lessons
+      const completedLessonCount = Object.keys(completedLessons).filter(
+        (key) => completedLessons[key] === true
+      ).length;
+
+      // Calculate progress percentage
+      const progressPercentage = Math.round(
+        (completedLessonCount / totalLessons) * 100
+      );
+
+      // Determine course status
+      const courseStatus =
+        completedLessonCount === totalLessons ? "completed" : "ongoing";
+
+      // Update batch with completed lessons
       const updateData = {
         [`${batchKey}.completedLessons`]: completedLessons,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -597,9 +655,49 @@ router.put(
 
       await docRef.update(updateData);
 
+      // Fetch trainees for this batch
+      const traineesSnapshot = await admin
+        .firestore()
+        .collection("trainees")
+        .doc(batchKey)
+        .get();
+
+      const trainees = traineesSnapshot.exists
+        ? traineesSnapshot.data().trainees || []
+        : [];
+
+      // Batch update for all trainees in this batch
+      const batch = admin.firestore().batch();
+
+      trainees.forEach((trainee) => {
+        const userManageRef = admin
+          .firestore()
+          .collection("user_manage")
+          .doc(trainee.userId);
+
+        // Prepare update for each trainee's course
+        const courseUpdate = {
+          [`courses.${existingBatchData.courseId}.progress`]:
+            progressPercentage,
+          [`courses.${existingBatchData.courseId}.status`]: courseStatus,
+          [`courses.${existingBatchData.courseId}.lastUpdated`]:
+            admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        batch.update(userManageRef, courseUpdate);
+      });
+
+      // Commit the batch update
+      await batch.commit();
+
       res.status(200).json({
         success: true,
-        message: "Batch completed lessons updated successfully",
+        message:
+          "Batch completed lessons and trainee progress updated successfully",
+        data: {
+          progressPercentage,
+          courseStatus,
+        },
       });
     } catch (error) {
       console.error("Error updating batch completed lessons:", error);

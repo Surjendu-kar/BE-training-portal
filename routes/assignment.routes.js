@@ -438,6 +438,96 @@ router.delete(
         });
       }
 
+      // Get the assignment details (needed for courseId)
+      const assignmentDetails = documentData[assignmentName];
+      const courseId = assignmentDetails.courseId;
+      const batchId = assignmentDetails.batchId;
+
+      // If there are submissions, update the user_manage records
+      if (
+        assignmentDetails.submissions &&
+        assignmentDetails.submissions.length > 0
+      ) {
+        try {
+          // Get all trainees who submitted this assignment
+          const submissions = assignmentDetails.submissions;
+
+          // Process each trainee who submitted
+          for (const submission of submissions) {
+            const traineeId = submission.traineeId;
+
+            // Get the user document
+            const userRef = admin
+              .firestore()
+              .collection("user_manage")
+              .doc(traineeId);
+            const userDoc = await userRef.get();
+
+            if (!userDoc.exists) {
+              console.warn(
+                `User ${traineeId} not found in user_manage collection`
+              );
+              continue;
+            }
+
+            const userData = userDoc.data();
+
+            // Check if the user has the course
+            if (!userData.courses || !userData.courses[courseId]) {
+              console.warn(
+                `Course ${courseId} not found for user ${traineeId}`
+              );
+              continue;
+            }
+
+            const courseData = userData.courses[courseId];
+
+            // Check if user has assignmentHistory
+            if (
+              !courseData.assignmentHistory ||
+              courseData.assignmentHistory.length === 0
+            ) {
+              continue;
+            }
+
+            // Remove this assignment from history
+            const assignmentId = `${documentId}-${assignmentName}`;
+            const updatedHistory = courseData.assignmentHistory.filter(
+              (entry) => entry.assignmentId !== documentId
+            );
+
+            // Calculate new average score
+            let averageScore = 0;
+            if (updatedHistory.length > 0) {
+              const totalScore = updatedHistory.reduce((sum, assignment) => {
+                // Convert totalMarks to number, default to 0 if not a valid number
+                const totalMarks = parseInt(assignment.totalMarks) || 0;
+
+                // If total marks is 0, return current sum to avoid division by zero
+                if (totalMarks === 0) return sum;
+
+                // Calculate percentage for this assignment and add to sum
+                return sum + (parseInt(assignment.score) / totalMarks) * 100;
+              }, 0);
+
+              // Calculate average score as percentage
+              averageScore = Math.round(totalScore / updatedHistory.length);
+            }
+
+            // Update the user document
+            await userRef.update({
+              [`courses.${courseId}.assignmentHistory`]: updatedHistory,
+              [`courses.${courseId}.averageScore`]: averageScore,
+              [`courses.${courseId}.lastUpdated`]:
+                admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        } catch (error) {
+          console.error("Error updating user_manage records:", error);
+          // Don't fail the whole request if this update fails
+        }
+      }
+
       res.status(200).json({
         success: true,
         message: "Assignment deleted successfully",
@@ -707,7 +797,7 @@ router.post(
             const scores = trainee.scores || [];
             scores.push({
               assignmentName,
-              assignmentId: `${documentId}-${assignmentName}`,
+              assignmentId: documentId,
               score: score.toString(),
               courseName: assignment.courseName,
               submittedAt,
@@ -722,6 +812,97 @@ router.post(
           trainees: updatedTrainees,
           lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
         });
+      }
+
+      // Update user_manage collection to store assignment history for calculating average score
+      try {
+        // Get the user document
+        const userRef = admin
+          .firestore()
+          .collection("user_manage")
+          .doc(traineeId);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+          console.warn(`User ${traineeId} not found in user_manage collection`);
+        } else {
+          const userData = userDoc.data();
+
+          // Check if the user has the course
+          if (!userData.courses || !userData.courses[assignment.courseId]) {
+            console.warn(
+              `Course ${assignment.courseId} not found for user ${traineeId}`
+            );
+          } else {
+            // Get the current course data for this user
+            const courseData = userData.courses[assignment.courseId];
+
+            // Initialize assignmentHistory if it doesn't exist
+            if (!courseData.assignmentHistory)
+              courseData.assignmentHistory = [];
+
+            // Create assignment record
+            const assignmentEntry = {
+              assignmentId: documentId, // Only use documentId without assignment name
+              assignmentName,
+              totalMarks: assignment.totalMarks || 0,
+              score,
+              submittedAt: admin.firestore.Timestamp.fromDate(
+                new Date(submittedAt)
+              ),
+              courseName: assignment.courseName,
+            };
+
+            // Check if assignment already exists in history
+            const existingEntryIndex = courseData.assignmentHistory.findIndex(
+              (entry) => entry.assignmentId === assignmentEntry.assignmentId
+            );
+
+            // If assignment already exists, update it; otherwise add it
+            if (existingEntryIndex !== -1) {
+              courseData.assignmentHistory[existingEntryIndex] =
+                assignmentEntry;
+            } else {
+              courseData.assignmentHistory.push(assignmentEntry);
+            }
+
+            // Calculate average score with percentage
+            const totalScore = courseData.assignmentHistory.reduce(
+              (sum, assignment) => {
+                // Convert totalMarks to number, default to 0 if not a valid number
+                const totalMarks = parseInt(assignment.totalMarks) || 0;
+
+                // If total marks is 0, return current sum to avoid division by zero
+                if (totalMarks === 0) return sum;
+
+                // Calculate percentage for this assignment and add to sum
+                return sum + (parseInt(assignment.score) / totalMarks) * 100;
+              },
+              0
+            );
+
+            // Calculate average score as percentage
+            const averageScore =
+              courseData.assignmentHistory.length > 0
+                ? Math.round(totalScore / courseData.assignmentHistory.length)
+                : 0;
+
+            // Update the user document
+            await userRef.update({
+              [`courses.${assignment.courseId}.assignmentHistory`]:
+                courseData.assignmentHistory,
+              [`courses.${assignment.courseId}.averageScore`]: averageScore,
+              [`courses.${assignment.courseId}.lastUpdated`]:
+                admin.firestore.FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      } catch (error) {
+        console.error(
+          `Error updating assignment history for user ${traineeId}:`,
+          error
+        );
+        // Don't fail the whole request if this update fails
       }
 
       res.status(200).json({

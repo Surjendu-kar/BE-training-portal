@@ -147,6 +147,7 @@ export const verifyPayment = async (req, res) => {
       // Fetch user details from user_manage collection
       let userName = orderData.userName || "";
       let userEmail = orderData.userEmail || "";
+      let userData = null;
 
       if (orderData.userId && orderData.userId !== "guest") {
         try {
@@ -157,7 +158,7 @@ export const verifyPayment = async (req, res) => {
             .get();
 
           if (userDoc.exists) {
-            const userData = userDoc.data();
+            userData = userDoc.data();
             userName = userData.fullName || "";
             userEmail = userData.email || userEmail;
           }
@@ -236,6 +237,51 @@ export const verifyPayment = async (req, res) => {
           userEmail: userEmail,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
+
+      // Get course details to store in user_manage collection
+      const courseDoc = await admin
+        .firestore()
+        .collection("courses")
+        .doc(orderData.courseId)
+        .get();
+
+      if (courseDoc.exists && orderData.userId) {
+        const courseData = courseDoc.data();
+        const courseName = courseData.title || "Unnamed Course";
+
+        // Get the user reference
+        const userRef = admin
+          .firestore()
+          .collection("user_manage")
+          .doc(orderData.userId);
+
+        // Create a courses field if it doesn't exist
+        // Store the course with default values for attendance, progress, etc.
+        const userUpdateData = {
+          [`courses.${orderData.courseId}`]: {
+            name: courseName,
+            enrolledAt: admin.firestore.FieldValue.serverTimestamp(),
+            batchId: orderData.batchId,
+            attendanceRate: 0,
+            progress: 0,
+            averageScore: 0,
+            lastAccessed: admin.firestore.FieldValue.serverTimestamp(),
+            status: "ongoing",
+            instructor: courseData.instructor || "",
+            duration: courseData.duration || "",
+          },
+        };
+
+        // Update user with enrolled course information
+        await userRef.update(userUpdateData);
+
+        // Also update the enrolledCourseIds array for backward compatibility
+        await userRef.update({
+          enrolledCourseIds: admin.firestore.FieldValue.arrayUnion(
+            orderData.courseId
+          ),
+        });
+      }
 
       res.status(200).json({
         success: true,
@@ -744,6 +790,49 @@ export const addManualPayment = async (req, res) => {
       });
     }
 
+    // Also update the user_manage collection with course information
+    if (userId) {
+      // Get course details to store in user_manage collection
+      const courseDoc = await admin
+        .firestore()
+        .collection("courses")
+        .doc(courseId)
+        .get();
+
+      if (courseDoc.exists) {
+        const courseData = courseDoc.data();
+        const courseName = courseData.title || "Unnamed Course";
+
+        // Get the user reference
+        const userRef = admin.firestore().collection("user_manage").doc(userId);
+
+        // Create a courses field if it doesn't exist
+        // Store the course with default values for attendance, progress, etc.
+        const userUpdateData = {
+          [`courses.${courseId}`]: {
+            name: courseName,
+            enrolledAt: admin.firestore.FieldValue.serverTimestamp(),
+            batchId: batchId,
+            attendanceRate: 0,
+            progress: 0,
+            averageScore: 0,
+            lastAccessed: admin.firestore.FieldValue.serverTimestamp(),
+            status: "ongoing",
+            instructor: courseData.instructor || "",
+            duration: courseData.duration || "",
+          },
+        };
+
+        // Update user with enrolled course information
+        await userRef.update(userUpdateData);
+
+        // Also update the enrolledCourseIds array for backward compatibility
+        await userRef.update({
+          enrolledCourseIds: admin.firestore.FieldValue.arrayUnion(courseId),
+        });
+      }
+    }
+
     res.status(200).json({
       success: true,
       message: "Payment added successfully",
@@ -889,6 +978,413 @@ export const getPaymentDetails = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to get payment details",
+      error: error.message,
+    });
+  }
+};
+
+// Update attendance rate for a course
+export const updateAttendanceRate = async (req, res) => {
+  try {
+    const { userId, courseId } = req.params;
+    const { attendanceRate } = req.body;
+
+    if (!userId || !courseId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID and Course ID are required",
+      });
+    }
+
+    if (
+      attendanceRate === undefined ||
+      attendanceRate < 0 ||
+      attendanceRate > 100
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid attendance rate (0-100) is required",
+      });
+    }
+
+    // Get the user document
+    const userDoc = await admin
+      .firestore()
+      .collection("user_manage")
+      .doc(userId)
+      .get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const userData = userDoc.data();
+
+    // Check if the user is enrolled in this course
+    if (!userData.courses || !userData.courses[courseId]) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found in user's enrolled courses",
+      });
+    }
+
+    // Update the attendance rate for the specific course
+    await admin
+      .firestore()
+      .collection("user_manage")
+      .doc(userId)
+      .update({
+        [`courses.${courseId}.attendanceRate`]: attendanceRate,
+        [`courses.${courseId}.lastUpdated`]:
+          admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+    res.status(200).json({
+      success: true,
+      message: "Attendance rate updated successfully",
+      data: {
+        userId,
+        courseId,
+        attendanceRate,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating attendance rate:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update attendance rate",
+      error: error.message,
+    });
+  }
+};
+
+// Update course progress percentage
+export const updateCourseProgress = async (req, res) => {
+  try {
+    const { userId, courseId } = req.params;
+    const { progress } = req.body;
+
+    if (!userId || !courseId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID and Course ID are required",
+      });
+    }
+
+    if (progress === undefined || progress < 0 || progress > 100) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid progress percentage (0-100) is required",
+      });
+    }
+
+    // Get the user document
+    const userDoc = await admin
+      .firestore()
+      .collection("user_manage")
+      .doc(userId)
+      .get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const userData = userDoc.data();
+
+    // Check if the user is enrolled in this course
+    if (!userData.courses || !userData.courses[courseId]) {
+      return res.status(404).json({
+        success: false,
+        message: "Course not found in user's enrolled courses",
+      });
+    }
+
+    // Update fields to modify
+    const updateFields = {
+      [`courses.${courseId}.progress`]: progress,
+      [`courses.${courseId}.lastAccessed`]:
+        admin.firestore.FieldValue.serverTimestamp(),
+      [`courses.${courseId}.lastUpdated`]:
+        admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    // If progress is 100%, update status to completed
+    if (progress === 100) {
+      updateFields[`courses.${courseId}.status`] = "completed";
+    }
+
+    // Update the progress percentage and last accessed timestamp
+    await admin
+      .firestore()
+      .collection("user_manage")
+      .doc(userId)
+      .update(updateFields);
+
+    res.status(200).json({
+      success: true,
+      message: "Course progress updated successfully",
+      data: {
+        userId,
+        courseId,
+        progress,
+        status: progress === 100 ? "completed" : "ongoing",
+      },
+    });
+  } catch (error) {
+    console.error("Error updating course progress:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update course progress",
+      error: error.message,
+    });
+  }
+};
+
+// Add or update course details for existing trainees
+export const updateTraineeCourseDetails = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const {
+      courseId,
+      courseName,
+      batchId,
+      attendanceRate,
+      progress,
+      averageScore,
+      enrolledAt,
+      instructor,
+      duration,
+      status,
+    } = req.body;
+
+    if (!userId || !courseId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID and Course ID are required",
+      });
+    }
+
+    if (!courseName) {
+      return res.status(400).json({
+        success: false,
+        message: "Course name is required",
+      });
+    }
+
+    // Get the user document
+    const userRef = admin.firestore().collection("user_manage").doc(userId);
+    const userDoc = await userRef.get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // Create default values for optional fields
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const courseDetails = {
+      name: courseName,
+      batchId: batchId || "",
+      attendanceRate: attendanceRate !== undefined ? attendanceRate : 0,
+      progress: progress !== undefined ? progress : 0,
+      averageScore: averageScore !== undefined ? averageScore : 0,
+      status: status || (progress === 100 ? "completed" : "ongoing"),
+      enrolledAt: enrolledAt || now,
+      lastAccessed: now,
+      lastUpdated: now,
+      instructor: instructor || "",
+      duration: duration || "",
+    };
+
+    // Update the user document with course details
+    await userRef.update({
+      [`courses.${courseId}`]: courseDetails,
+      enrolledCourseIds: admin.firestore.FieldValue.arrayUnion(courseId),
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Course details updated successfully",
+      data: {
+        userId,
+        courseId,
+        courseDetails,
+      },
+    });
+  } catch (error) {
+    console.error("Error updating trainee course details:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update trainee course details",
+      error: error.message,
+    });
+  }
+};
+
+// Batch update course details for multiple trainees
+export const batchUpdateTraineeCourses = async (req, res) => {
+  try {
+    const { trainees } = req.body;
+
+    if (!trainees || !Array.isArray(trainees) || trainees.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid trainees array is required",
+      });
+    }
+
+    const batch = admin.firestore().batch();
+    const now = admin.firestore.Timestamp.now();
+    const results = { success: [], failed: [] };
+
+    // Process each trainee
+    for (const trainee of trainees) {
+      const {
+        userId,
+        courseId,
+        courseName,
+        batchId,
+        attendanceRate,
+        progress,
+        averageScore,
+        instructor,
+        duration,
+        status,
+      } = trainee;
+
+      if (!userId || !courseId || !courseName) {
+        results.failed.push({
+          userId,
+          courseId,
+          reason: "Missing required fields",
+        });
+        continue;
+      }
+
+      try {
+        const userRef = admin.firestore().collection("user_manage").doc(userId);
+
+        // Create course details object
+        const courseDetails = {
+          name: courseName,
+          batchId: batchId || "",
+          attendanceRate: attendanceRate !== undefined ? attendanceRate : 0,
+          progress: progress !== undefined ? progress : 0,
+          averageScore: averageScore !== undefined ? averageScore : 0,
+          status: status || (progress === 100 ? "completed" : "ongoing"),
+          enrolledAt: now,
+          lastAccessed: now,
+          lastUpdated: now,
+          instructor: instructor || "",
+          duration: duration || "",
+        };
+
+        // Add to batch for course details update
+        batch.update(userRef, {
+          [`courses.${courseId}`]: courseDetails,
+        });
+
+        // Add to batch for enrolledCourseIds update (as a separate operation to avoid conflicts)
+        batch.update(userRef, {
+          enrolledCourseIds: admin.firestore.FieldValue.arrayUnion(courseId),
+        });
+
+        results.success.push({ userId, courseId });
+      } catch (error) {
+        console.error(`Error processing trainee ${userId}:`, error);
+        results.failed.push({ userId, courseId, reason: error.message });
+      }
+    }
+
+    // Commit the batch
+    await batch.commit();
+
+    res.status(200).json({
+      success: true,
+      message: `Processed ${results.success.length} trainees successfully. Failed: ${results.failed.length}`,
+      data: results,
+    });
+  } catch (error) {
+    console.error("Error in batch update of trainee courses:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to batch update trainee courses",
+      error: error.message,
+    });
+  }
+};
+
+// Get all courses for a trainee
+export const getTraineeCourses = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "User ID is required",
+      });
+    }
+
+    // Get the user document
+    const userDoc = await admin
+      .firestore()
+      .collection("user_manage")
+      .doc(userId)
+      .get();
+
+    if (!userDoc.exists) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const userData = userDoc.data();
+    const courses = userData.courses || {};
+
+    // Format the response
+    const formattedCourses = Object.entries(courses).map(
+      ([courseId, courseData]) => ({
+        courseId,
+        ...courseData,
+        // Convert timestamps to readable format if they exist
+        enrolledAt: courseData.enrolledAt
+          ? courseData.enrolledAt.toDate
+            ? courseData.enrolledAt.toDate()
+            : courseData.enrolledAt
+          : null,
+        lastAccessed: courseData.lastAccessed
+          ? courseData.lastAccessed.toDate
+            ? courseData.lastAccessed.toDate()
+            : courseData.lastAccessed
+          : null,
+        lastUpdated: courseData.lastUpdated
+          ? courseData.lastUpdated.toDate
+            ? courseData.lastUpdated.toDate()
+            : courseData.lastUpdated
+          : null,
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      count: formattedCourses.length,
+      data: formattedCourses,
+    });
+  } catch (error) {
+    console.error("Error getting trainee courses:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to get trainee courses",
       error: error.message,
     });
   }

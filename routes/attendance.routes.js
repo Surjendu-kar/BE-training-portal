@@ -228,12 +228,22 @@ router.post("/", authenticateUser, async (req, res) => {
     // Determine the document ID to use
     let documentId;
     let todayDate = "";
+    let currentDate = new Date(); // For storing the actual timestamp
 
     if (providedDocumentId) {
       // If documentId is provided, use it (update case)
       documentId = providedDocumentId;
       // Extract date part from the documentId (format: DD-MM-YY-batchId)
       todayDate = providedDocumentId.split("-").slice(0, 3).join("-"); // e.g. "10-04-25"
+
+      // Parse the date from the document ID
+      const dateParts = todayDate.split("-");
+      if (dateParts.length === 3) {
+        const day = parseInt(dateParts[0]);
+        const month = parseInt(dateParts[1]) - 1; // Month is 0-indexed in JS Date
+        const year = 2000 + parseInt(dateParts[2]); // Assuming two-digit year format
+        currentDate = new Date(year, month, day);
+      }
     } else {
       // Otherwise generate a new ID based on current date (create case)
       const today = new Date();
@@ -241,6 +251,7 @@ router.post("/", authenticateUser, async (req, res) => {
       const month = (today.getMonth() + 1).toString().padStart(2, "0");
       const year = today.getFullYear().toString().slice(-2);
 
+      currentDate = today;
       todayDate = `${day}-${month}-${year}`;
       documentId = `${todayDate}-${batchId}`;
     }
@@ -383,7 +394,148 @@ router.post("/", authenticateUser, async (req, res) => {
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // Commit the batch operation
+    // Now also update user_manage collection for each student
+    const userUpdates = [];
+
+    for (const student of studentDetails) {
+      const userId = student.studentId;
+      const isPresent = student.status === "Present";
+
+      // Skip if not a valid user ID
+      if (!userId) continue;
+
+      try {
+        // Get the user document
+        const userRef = admin.firestore().collection("user_manage").doc(userId);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+          console.warn(`User ${userId} not found in user_manage collection`);
+          continue;
+        }
+
+        const userData = userDoc.data();
+
+        // Check if the user has the course
+        if (!userData.courses || !userData.courses[courseId]) {
+          console.warn(`Course ${courseId} not found for user ${userId}`);
+          continue;
+        }
+
+        // Get the current attendance data for this course
+        const courseData = userData.courses[courseId];
+
+        // Initialize attendance fields if they don't exist
+        if (!courseData.totalPresent) courseData.totalPresent = 0;
+        if (!courseData.totalAbsent) courseData.totalAbsent = 0;
+        if (!courseData.attendanceHistory) courseData.attendanceHistory = [];
+
+        // Create attendance record for this specific date
+        const attendanceEntry = {
+          date: admin.firestore.Timestamp.fromDate(currentDate),
+          status: isPresent ? "Present" : "Absent",
+          batchId: batchId,
+        };
+
+        // Check if attendance for this date already exists
+        const existingEntryIndex = courseData.attendanceHistory.findIndex(
+          (entry) => {
+            // Compare entry date with current date (ignoring time)
+            if (!entry.date || !entry.date.toDate) return false;
+
+            const entryDate = entry.date.toDate();
+            return (
+              entryDate.getDate() === currentDate.getDate() &&
+              entryDate.getMonth() === currentDate.getMonth() &&
+              entryDate.getFullYear() === currentDate.getFullYear()
+            );
+          }
+        );
+
+        // If this is a new attendance entry for this day
+        if (isNewDateRecord || existingEntryIndex === -1) {
+          // Add attendance entry to history
+          if (existingEntryIndex === -1) {
+            courseData.attendanceHistory.push(attendanceEntry);
+          } else {
+            // If the entry exists but is a new record (different action), replace it
+            courseData.attendanceHistory[existingEntryIndex] = attendanceEntry;
+          }
+
+          // Update total counts for new records
+          if (isPresent) {
+            courseData.totalPresent += 1;
+          } else {
+            courseData.totalAbsent += 1;
+          }
+        }
+        // If updating an existing record and status changed
+        else if (existingData && !isNewDateRecord) {
+          // Find the student in existing attendance data
+          const existingStudent = existingData.studentDetails.find(
+            (s) => s.studentId === userId
+          );
+
+          if (existingStudent) {
+            // If status changed
+            if (existingStudent.status !== student.status) {
+              // Update the entry in attendance history
+              if (existingEntryIndex !== -1) {
+                courseData.attendanceHistory[existingEntryIndex] =
+                  attendanceEntry;
+              }
+
+              // If status changed from Present to Absent
+              if (existingStudent.status === "Present" && !isPresent) {
+                courseData.totalPresent = Math.max(
+                  0,
+                  courseData.totalPresent - 1
+                );
+                courseData.totalAbsent += 1;
+              }
+              // If status changed from Absent to Present
+              else if (existingStudent.status === "Absent" && isPresent) {
+                courseData.totalPresent += 1;
+                courseData.totalAbsent = Math.max(
+                  0,
+                  courseData.totalAbsent - 1
+                );
+              }
+            }
+          }
+        }
+
+        // Calculate attendance rate
+        const totalAttendance =
+          courseData.totalPresent + courseData.totalAbsent;
+        courseData.attendanceRate =
+          totalAttendance > 0
+            ? Math.round((courseData.totalPresent / totalAttendance) * 100)
+            : 0;
+
+        // Update the user's course data
+        const updateData = {
+          [`courses.${courseId}.totalPresent`]: courseData.totalPresent,
+          [`courses.${courseId}.totalAbsent`]: courseData.totalAbsent,
+          [`courses.${courseId}.attendanceRate`]: courseData.attendanceRate,
+          [`courses.${courseId}.attendanceHistory`]:
+            courseData.attendanceHistory,
+          [`courses.${courseId}.lastUpdated`]:
+            admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        userUpdates.push(userRef.update(updateData));
+      } catch (error) {
+        console.error(`Error updating attendance for user ${userId}:`, error);
+      }
+    }
+
+    // Wait for all user updates to complete
+    if (userUpdates.length > 0) {
+      await Promise.all(userUpdates);
+    }
+
+    // Commit the batch operation to update trainees collection
     await batch.commit();
 
     // Check if this was an update or create
@@ -430,6 +582,18 @@ router.delete("/:recordId", authenticateUser, async (req, res) => {
 
     const recordData = recordDoc.data();
     const batchId = recordData.batchId;
+    const courseId = recordData.courseId;
+
+    // Parse date from record ID
+    const dateParts = recordId.split("-").slice(0, 3).join("-").split("-");
+    let recordDate = null;
+
+    if (dateParts.length === 3) {
+      const day = parseInt(dateParts[0]);
+      const month = parseInt(dateParts[1]) - 1; // Month is 0-indexed in JS Date
+      const year = 2000 + parseInt(dateParts[2]); // Assuming two-digit year format
+      recordDate = new Date(year, month, day);
+    }
 
     // Get the trainees document to update their attendance stats
     const traineesRef = admin.firestore().collection("trainees").doc(batchId);
@@ -470,6 +634,98 @@ router.delete("/:recordId", authenticateUser, async (req, res) => {
         trainees: updatedTrainees,
         lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
       });
+    }
+
+    // Now also update user_manage collection for each affected student
+    const userUpdates = [];
+
+    // Process each student in the attendance record
+    for (const student of recordData.studentDetails) {
+      const userId = student.studentId;
+      const isPresent = student.status === "Present";
+
+      // Skip if not a valid user ID
+      if (!userId) continue;
+
+      try {
+        // Get the user document
+        const userRef = admin.firestore().collection("user_manage").doc(userId);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+          console.warn(`User ${userId} not found in user_manage collection`);
+          continue;
+        }
+
+        const userData = userDoc.data();
+
+        // Check if the user has the course
+        if (!userData.courses || !userData.courses[courseId]) {
+          console.warn(`Course ${courseId} not found for user ${userId}`);
+          continue;
+        }
+
+        // Get the current attendance data for this course
+        const courseData = userData.courses[courseId];
+
+        // Ensure fields exist
+        if (!courseData.totalPresent) courseData.totalPresent = 0;
+        if (!courseData.totalAbsent) courseData.totalAbsent = 0;
+        if (!courseData.attendanceHistory) courseData.attendanceHistory = [];
+
+        // Decrement appropriate counter
+        if (isPresent) {
+          courseData.totalPresent = Math.max(0, courseData.totalPresent - 1);
+        } else {
+          courseData.totalAbsent = Math.max(0, courseData.totalAbsent - 1);
+        }
+
+        // Remove the attendance entry from history if recordDate is valid
+        if (recordDate) {
+          courseData.attendanceHistory = courseData.attendanceHistory.filter(
+            (entry) => {
+              // Skip entries without valid date
+              if (!entry.date || !entry.date.toDate) return true;
+
+              const entryDate = entry.date.toDate();
+              // Keep entries that don't match this record's date
+              return !(
+                entryDate.getDate() === recordDate.getDate() &&
+                entryDate.getMonth() === recordDate.getMonth() &&
+                entryDate.getFullYear() === recordDate.getFullYear()
+              );
+            }
+          );
+        }
+
+        // Recalculate attendance rate
+        const totalAttendance =
+          courseData.totalPresent + courseData.totalAbsent;
+        courseData.attendanceRate =
+          totalAttendance > 0
+            ? Math.round((courseData.totalPresent / totalAttendance) * 100)
+            : 0;
+
+        // Update the user's course data
+        const updateData = {
+          [`courses.${courseId}.totalPresent`]: courseData.totalPresent,
+          [`courses.${courseId}.totalAbsent`]: courseData.totalAbsent,
+          [`courses.${courseId}.attendanceRate`]: courseData.attendanceRate,
+          [`courses.${courseId}.attendanceHistory`]:
+            courseData.attendanceHistory,
+          [`courses.${courseId}.lastUpdated`]:
+            admin.firestore.FieldValue.serverTimestamp(),
+        };
+
+        userUpdates.push(userRef.update(updateData));
+      } catch (error) {
+        console.error(`Error updating attendance for user ${userId}:`, error);
+      }
+    }
+
+    // Wait for all user updates to complete
+    if (userUpdates.length > 0) {
+      await Promise.all(userUpdates);
     }
 
     // Delete the record

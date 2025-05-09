@@ -9,6 +9,11 @@ import {
   addManualPayment,
   updatePayment,
   getPaymentDetails,
+  updateAttendanceRate,
+  updateCourseProgress,
+  updateTraineeCourseDetails,
+  batchUpdateTraineeCourses,
+  getTraineeCourses,
 } from "../controllers/payment.controller.js";
 import authenticateUser from "../middlewares/auth.middleware.js";
 
@@ -40,5 +45,36 @@ router.put("/:paymentId", authenticateUser, updatePayment);
 
 // Get payment details by ID
 router.get("/:paymentId", authenticateUser, getPaymentDetails);
+
+// Update attendance rate for a user's course
+router.put(
+  "/attendance-rate/:userId/:courseId",
+  authenticateUser,
+  updateAttendanceRate
+);
+
+// Update course progress percentage
+router.put(
+  "/course-progress/:userId/:courseId",
+  authenticateUser,
+  updateCourseProgress
+);
+
+// Add or update course details for a trainee
+router.put(
+  "/trainee-course/:userId",
+  authenticateUser,
+  updateTraineeCourseDetails
+);
+
+// Batch update multiple trainees' course details
+router.post(
+  "/batch-update-courses",
+  authenticateUser,
+  batchUpdateTraineeCourses
+);
+
+// Get all courses for a trainee
+router.get("/trainee-courses/:userId", authenticateUser, getTraineeCourses);
 
 export default router;
